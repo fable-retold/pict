@@ -32,6 +32,8 @@ suite(
 					(fDone) =>
 					{
 						let testPict = new libPict(_MockSettings);
+						// Isolate from default-provider CSS (e.g. the Icon provider's base sheet) so this exercises only the fragments under test.
+						testPict.CSSMap.inlineCSSMap = {};
 						Expect(testPict.CSSMap.generateCSS()).to.be.a('string', 'No CSS should still generate an empty string.');
 						Expect(testPict.CSSMap.generateCSS()).to.equal('');
 						testPict.CSSMap.addCSS('Test', 'body { bgcolor: #000000; }');
@@ -58,6 +60,8 @@ suite(
 					(fDone) =>
 					{
 						let testPict = new libPict(_MockSettings);
+						// Isolate from default-provider CSS (e.g. the Icon provider's base sheet) so this exercises only the fragments under test.
+						testPict.CSSMap.inlineCSSMap = {};
 						testPict.CSSMap.addCSS('T1', 'a', 100, 'F1');
 						testPict.CSSMap.addCSS('T2', 'b', 100, 'F1');
 						testPict.CSSMap.addCSS('E1', 'zzz', 150, 'F1');

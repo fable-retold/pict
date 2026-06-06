@@ -76,7 +76,7 @@ suite(
 
 						let tmpEnvironment = new libPict.EnvironmentLog(testPict, {});
 
-						Expect(Object.keys(testPict.providers).length).to.equal(2); // default providers
+						Expect(Object.keys(testPict.providers).length).to.equal(3); // default providers (FilterManager, DataBroker, Icon)
 
 						let tmpProvider = testPict.addProviderSingleton('MockPictProvider', {}, MockPictProvider);
 
@@ -86,7 +86,7 @@ suite(
 
 						Expect(tmpProvider2.Hash).to.equal(tmpProvider.Hash);
 
-						Expect(Object.keys(testPict.providers).length).to.equal(3);
+						Expect(Object.keys(testPict.providers).length).to.equal(4); // 3 defaults + the singleton added above
 
 						return fDone();
 					}
