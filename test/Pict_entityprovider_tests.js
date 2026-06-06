@@ -566,6 +566,47 @@ suite(
 						tmpAnticipate.wait(fDone);
 					}
 				);
+
+				test(
+					'getEntitySetPage / getEntitySetRecordCount honor a per-request URLPrefix',
+					function()
+					{
+						const testPict = new libPict(_MockSettings);
+						const getJSONStub = Sinon.stub(testPict.EntityProvider.restClient, 'getJSON');
+
+						// A per-request prefix routes to a custom (e.g. private-data-lake) endpoint...
+						testPict.EntityProvider.getEntitySetPage('MixDesign', '', 0, 50, () => {}, '', 'http://localhost:8086/1.0/PrivateDataLake/HMA/');
+						Sinon.assert.calledWith(getJSONStub, 'http://localhost:8086/1.0/PrivateDataLake/HMA/MixDesigns/0/50');
+
+						// ...and omitting it falls back to the provider's default prefix.
+						testPict.EntityProvider.getEntitySetPage('Book', '', 0, 50, () => {});
+						Sinon.assert.calledWith(getJSONStub, 'http://localhost:8086/1.0/Books/0/50');
+
+						// The count endpoint honors it too.
+						testPict.EntityProvider.getEntitySetRecordCount('MixDesign', '', () => {}, '', 'http://localhost:8086/1.0/PrivateDataLake/HMA/');
+						Sinon.assert.calledWith(getJSONStub, 'http://localhost:8086/1.0/PrivateDataLake/HMA/MixDesigns/Count');
+
+						getJSONStub.restore();
+					}
+				);
+
+				test(
+					'gatherEntitySet routes a request-def URLPrefix through to the page fetch',
+					function()
+					{
+						const testPict = new libPict(_MockSettings);
+						const getJSONStub = Sinon.stub(testPict.EntityProvider.restClient, 'getJSON');
+
+						// The request def carries URLPrefix → it must reach getEntitySetPage's URL.
+						testPict.EntityProvider.gatherEntitySet(
+							{ Entity: 'MixDesign', Filter: '', Destination: 'Result', RecordStartCursor: 0, PageSize: 50, URLPrefix: 'http://localhost:8086/1.0/PrivateDataLake/HMA/' },
+							{},
+							() => {});
+						Sinon.assert.calledWith(getJSONStub, 'http://localhost:8086/1.0/PrivateDataLake/HMA/MixDesigns/0/50');
+
+						getJSONStub.restore();
+					}
+				);
 			}
 		);
 

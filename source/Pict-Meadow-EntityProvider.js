@@ -209,11 +209,11 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		};
 		if (pEntityInformation.CountOnly)
 		{
-			this.getEntitySetRecordCount(pEntityInformation.Entity, tmpFilterString, fRecordFetchComplete, pEntityInformation.Postfix);
+			this.getEntitySetRecordCount(pEntityInformation.Entity, tmpFilterString, fRecordFetchComplete, pEntityInformation.Postfix, pEntityInformation.URLPrefix);
 		}
 		else if (tmpPageSize && !pEntityInformation.AllRecords)
 		{
-			this.getEntitySetPage(pEntityInformation.Entity, tmpFilterString, tmpRecordStartCursor, tmpPageSize, fRecordFetchComplete, pEntityInformation.Postfix);
+			this.getEntitySetPage(pEntityInformation.Entity, tmpFilterString, tmpRecordStartCursor, tmpPageSize, fRecordFetchComplete, pEntityInformation.Postfix, pEntityInformation.URLPrefix);
 		}
 		else
 		{
@@ -1396,11 +1396,12 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {number} pRecordCount - The number of records to return for pagination.
 	 * @param {(pError?: Error, pEntitySet?: Array<Record<string, any>>) => void} fCallback - The callback function to call when the operation is complete.
 	 * @param {string} [postfix] - Optional, adds a postfix string to the url.
+	 * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default (e.g. a private-data-lake route).
 	 */
-	getEntitySetPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount, fCallback, postfix = '')
+	getEntitySetPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount, fCallback, postfix = '', pURLPrefix = '')
 	{
 		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpURL = `${this.options.urlPrefix}${pEntity}s${tmpFilterStanza}/${pRecordStartCursor}/${pRecordCount}`;
+		const tmpURL = `${pURLPrefix || this.options.urlPrefix}${pEntity}s${tmpFilterStanza}/${pRecordStartCursor}/${pRecordCount}`;
 
 		return this.restClient.getJSON(tmpURL + (postfix || ''),
 			function (pDownloadError, pDownloadResponse, pDownloadBody)
@@ -1422,11 +1423,12 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
 	 * @param {(pError?: Error, pRecordCount?: number) => void} fCallback - The callback function to call when the operation is complete.
 	 * @param {string} [postfix] - Optional, adds a postfix string to the count url
+	 * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default.
 	 */
-	getEntitySetRecordCount(pEntity, pMeadowFilterExpression, fCallback, postfix = '')
+	getEntitySetRecordCount(pEntity, pMeadowFilterExpression, fCallback, postfix = '', pURLPrefix = '')
 	{
 		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpURL = `${this.options.urlPrefix}${pEntity}s/Count${tmpFilterStanza}`;
+		const tmpURL = `${pURLPrefix || this.options.urlPrefix}${pEntity}s/Count${tmpFilterStanza}`;
 
 		return this.restClient.getJSON(tmpURL + (postfix || ''),
 			function (pError, pResponse, pBody)
@@ -1555,6 +1557,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 */
 	getEntitySet(pEntity, pMeadowFilterExpression, fCallback, postfix = '', pOptions = {})
 	{
+		const tmpURLPrefix = pOptions.URLPrefix || this.options.urlPrefix;
 		// TODO: Should we test for too many record IDs here by string length in pMeadowFilterExpression?
 		//       FBL~ID${pDestinationEntity}~INN~${tmpIDRecordsCommaSeparated}
 		//       If the list is mega-long we can parse it and break it into chunks.
@@ -1597,10 +1600,10 @@ class PictMeadowEntityProvider extends libFableServiceBase
 						else
 						{
 							page += 1;
-							this.restClient.getJSON(`${this.options.urlPrefix}${pEntity}s${tmpFilterStanza}/${page * pageSize}/${pageSize}` + (postfix || ''), recursiveCallback);
+							this.restClient.getJSON(`${tmpURLPrefix}${pEntity}s${tmpFilterStanza}/${page * pageSize}/${pageSize}` + (postfix || ''), recursiveCallback);
 						}
 					};
-					return this.restClient.getJSON(`${this.options.urlPrefix}${pEntity}s${tmpFilterStanza}/${page * pageSize}/${pageSize}` + (postfix || ''), recursiveCallback);
+					return this.restClient.getJSON(`${tmpURLPrefix}${pEntity}s${tmpFilterStanza}/${page * pageSize}/${pageSize}` + (postfix || ''), recursiveCallback);
 				}
 				return this.getEntitySetRecordCount(pEntity, pMeadowFilterExpression,
 					(pRecordCountError, pRecordCount) =>
@@ -1627,7 +1630,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 						{
 							tmpPages.push({
 								Index: i,
-								URL: `${this.options.urlPrefix}${pEntity}s${tmpFilterStanza}/${i * tmpDownloadBatchSize}/${tmpDownloadBatchSize}`,
+								URL: `${tmpURLPrefix}${pEntity}s${tmpFilterStanza}/${i * tmpDownloadBatchSize}/${tmpDownloadBatchSize}`,
 								Records: null
 							});
 						}
@@ -1676,7 +1679,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 								return fCallback(pFullDownloadError, tmpEntitySet);
 							})
-					}, postfix);
+					}, postfix, pOptions.URLPrefix);
 			}.bind(this));
 	}
 
