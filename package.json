@@ -1,6 +1,6 @@
 {
   "name": "pict",
-  "version": "1.0.373",
+  "version": "1.0.374",
   "description": "Pict browser library.",
   "main": "source/Pict.js",
   "scripts": {

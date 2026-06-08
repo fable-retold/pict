@@ -77,31 +77,77 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	}
 
 	/**
-	 * @param {string} pEntity - The name of the entity to initialize the cache for
+	 * Compute the cache bucket key for an entity, optionally namespaced by a scope.
+	 * A non-empty scope yields an isolated bucket (`Entity::Scope`) so scoped/partial
+	 * (e.g. Lite) records never touch the global `Entity` cache that full-record
+	 * consumers ({~E:~}, read views, pickers) rely on. Empty scope === today's key.
+	 * @param {string} pEntity - The entity name.
+	 * @param {string} [pScope] - Optional cache scope.
+	 * @return {string} The cache bucket key.
 	 */
-	initializeCache(pEntity)
+	_cacheKey(pEntity, pScope)
 	{
+		return pScope ? `${pEntity}::${pScope}` : pEntity;
+	}
+
+	/**
+	 * @param {string} pEntity - The name of the entity to initialize the cache for
+	 * @param {string} [pScope] - Optional cache scope to namespace the bucket.
+	 */
+	initializeCache(pEntity, pScope = '')
+	{
+		const tmpCacheKey = this._cacheKey(pEntity, pScope);
 		// This should not be happening as often as it's happening.
-		if (!(pEntity in this.recordCache))
+		if (!(tmpCacheKey in this.recordCache))
 		{
 			//@ts-ignore - FIXME - remove once we have fable types
-			this.recordCache[pEntity] = this.fable.instantiateServiceProviderWithoutRegistration('ObjectCache');
+			this.recordCache[tmpCacheKey] = this.fable.instantiateServiceProviderWithoutRegistration('ObjectCache');
 			// TODO: Make this a configuration?
 			// For now cache for 30 seconds.
-			this.recordCache[pEntity].maxAge = 30000;
-			this.recordCache[pEntity].maxLength = 10000;
+			this.recordCache[tmpCacheKey].maxAge = 30000;
+			this.recordCache[tmpCacheKey].maxLength = 10000;
 
-			this.fable.Bundle[pEntity] = this.recordCache[pEntity].RecordMap;
+			this.fable.Bundle[tmpCacheKey] = this.recordCache[tmpCacheKey].RecordMap;
 		}
 		// This should not be happening as often as it's happening.
-		if (!(pEntity in this.recordSetCache))
+		if (!(tmpCacheKey in this.recordSetCache))
 		{
 			//@ts-ignore - FIXME - remove once we have fable types
-			this.recordSetCache[pEntity] = this.fable.instantiateServiceProviderWithoutRegistration('ObjectCache');
+			this.recordSetCache[tmpCacheKey] = this.fable.instantiateServiceProviderWithoutRegistration('ObjectCache');
 			// TODO: Make this a configuration?
 			// For now cache for 10 seconds.
-			this.recordSetCache[pEntity].maxAge = 10000;
-			this.recordSetCache[pEntity].maxLength = 100;
+			this.recordSetCache[tmpCacheKey].maxAge = 10000;
+			this.recordSetCache[tmpCacheKey].maxLength = 100;
+		}
+	}
+
+	/**
+	 * Clear every cache bucket (record + record-set + Bundle map) belonging to a
+	 * scope. Recordset lists call this at the start of each load (fresh prefetch,
+	 * no stale list data) and on CRUD invalidation.
+	 * @param {string} pScope - The cache scope to clear.
+	 */
+	clearScope(pScope)
+	{
+		if (!pScope)
+		{
+			return;
+		}
+		const tmpSuffix = `::${pScope}`;
+		for (const tmpKey of Object.keys(this.recordCache))
+		{
+			if (tmpKey.endsWith(tmpSuffix))
+			{
+				delete this.recordCache[tmpKey];
+				delete this.fable.Bundle[tmpKey];
+			}
+		}
+		for (const tmpKey of Object.keys(this.recordSetCache))
+		{
+			if (tmpKey.endsWith(tmpSuffix))
+			{
+				delete this.recordSetCache[tmpKey];
+			}
 		}
 	}
 
@@ -213,7 +259,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		}
 		else if (tmpPageSize && !pEntityInformation.AllRecords)
 		{
-			this.getEntitySetPage(pEntityInformation.Entity, tmpFilterString, tmpRecordStartCursor, tmpPageSize, fRecordFetchComplete, pEntityInformation.Postfix, pEntityInformation.URLPrefix);
+			this.getEntitySetPage(pEntityInformation.Entity, tmpFilterString, tmpRecordStartCursor, tmpPageSize, fRecordFetchComplete, pEntityInformation.Postfix, pEntityInformation.URLPrefix, { Scope: pEntityInformation.Scope, Projection: pEntityInformation.Projection });
 		}
 		else
 		{
@@ -1137,14 +1183,15 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {string|number} pIDRecord - The ID of the record to get.
 	 * @param {(pError?: Error, pRecord?: any) => void} fCallback - The callback function to call when the operation is complete.
 	 */
-	getEntity(pEntity, pIDRecord, fCallback)
+	getEntity(pEntity, pIDRecord, fCallback, pScope = '')
 	{
-		this.initializeCache(pEntity);
+		this.initializeCache(pEntity, pScope);
+		const tmpCacheKey = this._cacheKey(pEntity, pScope);
 		// Discard anything from the cache that has expired or is over size.
-		this.recordCache[pEntity].prune(
+		this.recordCache[tmpCacheKey].prune(
 			function ()
 			{
-				let tmpPossibleRecord = this.recordCache[pEntity].read(pIDRecord);
+				let tmpPossibleRecord = this.recordCache[tmpCacheKey].read(pIDRecord);
 
 				if (tmpPossibleRecord)
 				{
@@ -1170,7 +1217,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 						*/
 						if (pBody)
 						{
-							this.recordCache[pEntity].put(pBody, pIDRecord);
+							this.recordCache[tmpCacheKey].put(pBody, pIDRecord);
 						}
 						return fCallback(pError, pBody);
 					});
@@ -1187,7 +1234,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 *
 	 * @return {void}
 	 */
-	cacheConnectedEntityRecordsWithoutCount(pRecordSet, pIDListToCache, pEntityListToCache, pLiteRecords, fCallback)
+	cacheConnectedEntityRecordsWithoutCount(pRecordSet, pIDListToCache, pEntityListToCache, pLiteRecords, fCallback, pScope = '')
 	{
 		//FIXME: pLiteRecords is ignored?
 		if (!Array.isArray(pRecordSet) || pRecordSet.length < 1)
@@ -1215,7 +1262,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			const tmpEntityIDsToFetch = new Set();
 
 			// Initialize the cache
-			this.initializeCache(tmpEntityName);
+			this.initializeCache(tmpEntityName, pScope);
+			const tmpCacheKey = this._cacheKey(tmpEntityName, pScope);
+			// Prune expired entries BEFORE reading: read() does not check TTL, so an
+			// expired-but-unpruned entry reads as a hit and we'd wrongly skip the batch
+			// fetch, only for the per-row getEntity (which prunes first) to miss and
+			// fetch each one individually. prune is synchronous.
+			this.recordCache[tmpCacheKey].prune(() => {});
 
 			// First pass: gather IDs to fetch
 			for (const tmpRecord of pRecordSet)
@@ -1223,7 +1276,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 				const tmpIDValue = tmpRecord[tmpEntityIDSourceField];
 				if (tmpIDValue)
 				{
-					const tmpCachedRecord = this.recordCache[tmpEntityName].read(tmpIDValue);
+					const tmpCachedRecord = this.recordCache[tmpCacheKey].read(tmpIDValue);
 					if (!tmpCachedRecord)
 					{
 						tmpEntityIDsToFetch.add(tmpIDValue);
@@ -1250,7 +1303,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 								}
 								// The method automagically cached them for us!  Just move on to the next...
 								return fRequestComplete();
-							}, null, { NoCount: true });
+							}, null, { NoCount: true, Scope: pScope });
 					}.bind(this));
 			}
 		}
@@ -1277,7 +1330,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 *
 	 * @return {void}
 	 */
-	cacheConnectedEntityRecords(pRecordSet, pIDListToCache, pEntityListToCache, pLiteRecords, fCallback)
+	cacheConnectedEntityRecords(pRecordSet, pIDListToCache, pEntityListToCache, pLiteRecords, fCallback, pScope = '')
 	{
 		//FIXME: pLiteRecords is ignored?
 		if (!Array.isArray(pRecordSet) || pRecordSet.length < 1)
@@ -1305,7 +1358,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			const tmpEntityIDsToFetch = new Set();
 
 			// Initialize the cache
-			this.initializeCache(tmpEntityName);
+			this.initializeCache(tmpEntityName, pScope);
+			const tmpCacheKey = this._cacheKey(tmpEntityName, pScope);
+			// Prune expired entries BEFORE reading: read() does not check TTL, so an
+			// expired-but-unpruned entry reads as a hit and we'd wrongly skip the batch
+			// fetch, only for the per-row getEntity (which prunes first) to miss and
+			// fetch each one individually. prune is synchronous.
+			this.recordCache[tmpCacheKey].prune(() => {});
 
 			// First pass: gather IDs to fetch
 			for (const tmpRecord of pRecordSet)
@@ -1313,7 +1372,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 				const tmpIDValue = tmpRecord[tmpEntityIDSourceField];
 				if (tmpIDValue)
 				{
-					const tmpCachedRecord = this.recordCache[tmpEntityName].read(tmpIDValue);
+					const tmpCachedRecord = this.recordCache[tmpCacheKey].read(tmpIDValue);
 					if (!tmpCachedRecord)
 					{
 						tmpEntityIDsToFetch.add(tmpIDValue);
@@ -1340,7 +1399,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 								}
 								// The method automagically cached them for us!  Just move on to the next...
 								return fRequestComplete();
-							});
+							}, null, { Scope: pScope });
 					}.bind(this));
 			}
 		}
@@ -1363,9 +1422,10 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {string} pEntity - The entity type to cache individual records for
 	 * @param {Array<Record<string, any>>} pRecordSet - An array of records to cache
 	 */
-	cacheIndividualEntityRecords(pEntity, pRecordSet)
+	cacheIndividualEntityRecords(pEntity, pRecordSet, pScope = '')
 	{
-		this.initializeCache(pEntity);
+		this.initializeCache(pEntity, pScope);
+		const tmpCacheKey = this._cacheKey(pEntity, pScope);
 
 		const tmpEntitySet = pRecordSet;
 
@@ -1382,7 +1442,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					const tmpIDRecord = tmpRecord[tmpSpeculativeRecordIDColumn];
 					if (tmpIDRecord)
 					{
-						this.recordCache[pEntity].put(tmpRecord, tmpIDRecord);
+						this.recordCache[tmpCacheKey].put(tmpRecord, tmpIDRecord);
 					}
 				}
 			}
@@ -1397,11 +1457,22 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {(pError?: Error, pEntitySet?: Array<Record<string, any>>) => void} fCallback - The callback function to call when the operation is complete.
 	 * @param {string} [postfix] - Optional, adds a postfix string to the url.
 	 * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default (e.g. a private-data-lake route).
+	 * @param {Record<string, any>} [pOptions] - Optional { Scope, Projection }: cache scope and Lite/LiteExtended projection.
 	 */
-	getEntitySetPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount, fCallback, postfix = '', pURLPrefix = '')
+	getEntitySetPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount, fCallback, postfix = '', pURLPrefix = '', pOptions = {})
 	{
 		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpURL = `${pURLPrefix || this.options.urlPrefix}${pEntity}s${tmpFilterStanza}/${pRecordStartCursor}/${pRecordCount}`;
+		// LiteExtended projection: fetch only ID/GUID/owner/update + the requested
+		// ExtraColumns (drops blob columns). Used by scoped list fetches to avoid the
+		// heavy full-record payload.
+		const tmpProjectionStanza = (pOptions && pOptions.Projection && pOptions.Projection.Mode === 'LiteExtended' && Array.isArray(pOptions.Projection.ExtraColumns) && pOptions.Projection.ExtraColumns.length > 0)
+			? `/LiteExtended/${pOptions.Projection.ExtraColumns.join(',')}`
+			: '';
+		const tmpScope = (pOptions && pOptions.Scope) ? pOptions.Scope : '';
+		// Per-request URL prefix override (positional, e.g. a private-data-lake route);
+		// also accepted via pOptions.URLPrefix. Falls back to the provider default.
+		const tmpURLPrefix = pURLPrefix || (pOptions && pOptions.URLPrefix) || this.options.urlPrefix;
+		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}/${pRecordStartCursor}/${pRecordCount}`;
 
 		return this.restClient.getJSON(tmpURL + (postfix || ''),
 			function (pDownloadError, pDownloadResponse, pDownloadBody)
@@ -1412,7 +1483,14 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}] from url [${tmpURL}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
 				}
 
-				this.cacheIndividualEntityRecords(pEntity, pDownloadBody);
+				// Do not cache projected (Lite/partial) records in the entity cache — a
+				// partial record would shadow the full record for other consumers
+				// (row-click View, {~E:~}). Projected fetches are rendered straight from
+				// the list state and never need to be in the entity cache.
+				if (!(pOptions && pOptions.Projection))
+				{
+					this.cacheIndividualEntityRecords(pEntity, pDownloadBody, tmpScope);
+				}
 
 				return fCallback(pDownloadError, pDownloadBody);
 			}.bind(this));
@@ -1561,12 +1639,14 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		// TODO: Should we test for too many record IDs here by string length in pMeadowFilterExpression?
 		//       FBL~ID${pDestinationEntity}~INN~${tmpIDRecordsCommaSeparated}
 		//       If the list is mega-long we can parse it and break it into chunks.
-		this.initializeCache(pEntity);
+		const tmpScope = (pOptions && pOptions.Scope) ? pOptions.Scope : '';
+		this.initializeCache(pEntity, tmpScope);
+		const tmpCacheKey = this._cacheKey(pEntity, tmpScope);
 		// Discard anything from the cache that has expired or is over size.
-		this.recordSetCache[pEntity].prune(
+		this.recordSetCache[tmpCacheKey].prune(
 			function ()
 			{
-				let tmpPossibleRecords = this.recordSetCache[pEntity].read(pMeadowFilterExpression);
+				let tmpPossibleRecords = this.recordSetCache[tmpCacheKey].read(pMeadowFilterExpression);
 
 				if (tmpPossibleRecords)
 				{
@@ -1592,9 +1672,9 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 						if (pDownloadBody?.length < pageSize)
 						{
-							this.recordSetCache[pEntity].put(returnSet, pMeadowFilterExpression);
+							this.recordSetCache[tmpCacheKey].put(returnSet, pMeadowFilterExpression);
 
-							this.cacheIndividualEntityRecords(pEntity, returnSet);
+							this.cacheIndividualEntityRecords(pEntity, returnSet, tmpScope);
 							fCallback(null, returnSet);
 						}
 						else
@@ -1672,10 +1752,10 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 								if (tmpEntitySet)
 								{
-									this.recordSetCache[pEntity].put(tmpEntitySet, pMeadowFilterExpression);
+									this.recordSetCache[tmpCacheKey].put(tmpEntitySet, pMeadowFilterExpression);
 								}
 
-								this.cacheIndividualEntityRecords(pEntity, tmpEntitySet);
+								this.cacheIndividualEntityRecords(pEntity, tmpEntitySet, tmpScope);
 
 								return fCallback(pFullDownloadError, tmpEntitySet);
 							})

@@ -826,6 +826,8 @@ class FilterMeadowStanzaTokenGenerator
 			AllRecords: typeof pFilterState.PageSize === 'undefined',
 			RecordStartCursor: pFilterState.RecordOffset,
 			Postfix: pFilterState.Postfix || '',
+			Scope: pFilterState.Scope || '',
+			Projection: pFilterState.Projection,
 			PageSize: pFilterState.PageSize,
 			Destination: pFilterState.ResultDestinationAddress,
 		};
