@@ -226,13 +226,18 @@ class FilterMeadowStanzaTokenGenerator
 						const hasEndValue = tmpFilterConfig.Values && tmpFilterConfig.Values.End && (tmpFilterConfig.Type != 'ExternalJoinDateRange' || tmpFilterConfig.Values.End != '0');
 						if (hasStartValue)
 						{
+							// A range is `(Start <= field <= End)` — both bounds AND'd within
+							// the paren group AND'd with the rest of the query. Use FBV/FBV
+							// (not FBVOR), and open a non-OR paren group; otherwise
+							// `(scope) OR (start OR end)` collapses because OR(start, end)
+							// is trivially true for every value.
 							tmpFilterResult.Filters.push(
 							{
 								Index: -1,
 								Entity: tmpFilterConfig.ExternalFilterByTable,
-								Instruction: 'FBVOR',
+								Instruction: 'FBV',
 								OpenParen: true,
-								OpenParenOr: true,
+								OpenParenOr: false,
 								CloseParen: !hasEndValue,
 								Field: tmpField,
 								Operator: tmpFilterConfig.StartExclusive ? 'GT' : 'GE',
@@ -247,7 +252,7 @@ class FilterMeadowStanzaTokenGenerator
 								Entity: tmpFilterConfig.ExternalFilterByTable,
 								Instruction: 'FBV',
 								OpenParen: !hasStartValue,
-								OpenParenOr: !hasStartValue,
+								OpenParenOr: false,
 								CloseParen: true,
 								Field: tmpField,
 								Operator: tmpFilterConfig.EndExclusive ? 'LT' : 'LE',
@@ -342,15 +347,20 @@ class FilterMeadowStanzaTokenGenerator
 						const hasEndValue = tmpFilterConfig.Values && tmpFilterConfig.Values.End && (tmpFilterConfig.Type != 'DateRange' || tmpFilterConfig.Values.End != '0');
 						if (hasStartValue)
 						{
+							// See the comment in the ExternalJoin*Range case above — Range is
+							// `(Start <= field <= End)`, both bounds AND'd inside the paren
+							// group and AND'd with the rest of the query. The previous
+							// FBVOR + OpenParenOr emit produced `(scope) OR (start OR end)`
+							// because OR(start, end) is trivially true for every value.
 							tmpFilterResult.Filters.push(
 							{
 								Index: 0,
 								CoreEntity: true,
 								Entity: pFilterState.Entity,
-								Instruction: 'FBVOR',
+								Instruction: 'FBV',
 								Field: tmpField,
 								OpenParen: true,
-								OpenParenOr: true,
+								OpenParenOr: false,
 								CloseParen: !hasEndValue,
 								Operator: tmpFilterConfig.StartExclusive ? 'GT' : 'GE',
 								Value: tmpFilterConfig.Values.Start,
@@ -365,7 +375,7 @@ class FilterMeadowStanzaTokenGenerator
 								Entity: pFilterState.Entity,
 								Instruction: 'FBV',
 								OpenParen: !hasStartValue,
-								OpenParenOr: !hasStartValue,
+								OpenParenOr: false,
 								CloseParen: true,
 								Field: tmpField,
 								Operator: tmpFilterConfig.EndExclusive ? 'LT' : 'LE',
@@ -436,14 +446,17 @@ class FilterMeadowStanzaTokenGenerator
 						const hasEndValue = tmpFilterConfig.Values && tmpFilterConfig.Values.End && (tmpFilterConfig.Type != 'InternalJoinDateRange' || tmpFilterConfig.Values.End != '0');
 						if (hasStartValue)
 						{
+							// See the comment in the ExternalJoin*Range case above — Range is
+							// `(Start <= field <= End)`, both bounds AND'd inside the paren
+							// group.
 							tmpFilterResult.Filters.push(
 							{
 								Index: 0,
 								Entity: tmpFilterConfig.RemoteTable,
-								Instruction: 'FBVOR',
+								Instruction: 'FBV',
 								Field: tmpField,
 								OpenParen: true,
-								OpenParenOr: true,
+								OpenParenOr: false,
 								CloseParen: !hasEndValue,
 								Operator: tmpFilterConfig.StartExclusive ? 'GT' : 'GE',
 								Value: tmpFilterConfig.Values.Start,
@@ -457,7 +470,7 @@ class FilterMeadowStanzaTokenGenerator
 								Entity: tmpFilterConfig.RemoteTable,
 								Instruction: 'FBV',
 								OpenParen: !hasStartValue,
-								OpenParenOr: !hasStartValue,
+								OpenParenOr: false,
 								CloseParen: true,
 								Field: tmpField,
 								Operator: tmpFilterConfig.EndExclusive ? 'LT' : 'LE',
