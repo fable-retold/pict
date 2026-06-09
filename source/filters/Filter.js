@@ -880,9 +880,15 @@ class FilterMeadowStanzaTokenGenerator
 				{
 					tmpFilter += '~';
 				}
-				tmpFilter += 'FOP~0~(~0~';
+				// The user-filter and core-filter strings already carry their
+				// own paren grouping from the per-group serializer above (the
+				// `FOP(stanzas)` wrap at line 822). Wrapping a SECOND time here
+				// produces `FOP(FOP(...))` which meadow-endpoints'
+				// MeadowEndpoints dialect (used by the lake's
+				// /PrivateDataLake/* routes) treats as malformed — the route
+				// 404s instead of filtering. The right shape is one paren per
+				// logical group, concatenated flat at the top level.
 				tmpFilter += tmpSanitizedUserFilter;
-				tmpFilter += '~FCP~0~)~0';
 			}
 			if (tmpCoreLoadStep.Filter)
 			{
@@ -890,9 +896,7 @@ class FilterMeadowStanzaTokenGenerator
 				{
 					tmpFilter += '~';
 				}
-				tmpFilter += 'FOP~0~(~0~';
 				tmpFilter += tmpCoreLoadStep.Filter;
-				tmpFilter += '~FCP~0~)~0';
 			}
 			if (tmpAllSorts)
 			{
