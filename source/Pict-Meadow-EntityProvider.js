@@ -1291,19 +1291,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					function (fRequestComplete)
 					{
 						const tmpIDRecordsArray = Array.from(tmpEntityIDsToFetch);
-						const tmpMeadowFilterExpression = `FBL~ID${tmpEntityName}~INN~${tmpIDRecordsArray.join(',')}`;
-
-						this.getEntitySet(tmpEntityName, tmpMeadowFilterExpression,
-							(pError, pEntitySet) =>
-							{
-								if (pError)
-								{
-									this.log.error(`cacheConnectedEntityRecords error getting connected entity records for [${tmpEntityName}] with IDs [${tmpIDRecordsArray.join(',')}]: ${pError}`, { Stack: pError.stack });
-									return fRequestComplete(pError);
-								}
-								// The method automagically cached them for us!  Just move on to the next...
-								return fRequestComplete();
-							}, null, { NoCount: true, Scope: pScope });
+						this.getEntitySetByIDListChunked(tmpEntityName, tmpIDRecordsArray, { NoCount: true, Scope: pScope }, fRequestComplete);
 					}.bind(this));
 			}
 		}
@@ -1318,6 +1306,53 @@ class PictMeadowEntityProvider extends libFableServiceBase
 				}
 				return fCallback();
 			});
+	}
+
+	/**
+	 * Fetch a set of entity records by primary-key ID list, chunking the meadow IN
+	 * filter so the generated GET URL never exceeds HTTP/2 header-size limits on
+	 * large sets (oversized URLs trip a connection-level reset that takes sibling
+	 * multiplexed requests down with it). Records are cached as a side effect of
+	 * getEntitySet; the callback returns no data.
+	 *
+	 * @param {string} pEntityName - The entity name (e.g. 'Project').
+	 * @param {Array<number|string>} pIDRecordsArray - The primary-key IDs to fetch.
+	 * @param {Object} pOptions - Options passed through to getEntitySet (Scope, NoCount, etc).
+	 * @param {(error?: Error) => void} fCallback - Completion callback.
+	 *
+	 * @return {void}
+	 */
+	getEntitySetByIDListChunked(pEntityName, pIDRecordsArray, pOptions, fCallback)
+	{
+		if (!Array.isArray(pIDRecordsArray) || pIDRecordsArray.length < 1)
+		{
+			return fCallback();
+		}
+
+		const tmpAnticipate = this.fable.newAnticipate();
+		const tmpChunkSize = (this.options && this.options.ConnectedEntityIDChunkSize) || 200;
+
+		for (let i = 0; i < pIDRecordsArray.length; i += tmpChunkSize)
+		{
+			const tmpIDChunk = pIDRecordsArray.slice(i, i + tmpChunkSize);
+			tmpAnticipate.anticipate(
+				function (fChunkComplete)
+				{
+					const tmpMeadowFilterExpression = `FBL~ID${pEntityName}~INN~${tmpIDChunk.join(',')}`;
+					this.getEntitySet(pEntityName, tmpMeadowFilterExpression,
+						(pError) =>
+						{
+							if (pError)
+							{
+								this.log.error(`getEntitySetByIDListChunked error getting connected entity records for [${pEntityName}] with IDs [${tmpIDChunk.join(',')}]: ${pError}`, { Stack: pError.stack });
+								return fChunkComplete(pError);
+							}
+							return fChunkComplete();
+						}, null, pOptions);
+				}.bind(this));
+		}
+
+		tmpAnticipate.wait(fCallback);
 	}
 
 	/**
@@ -1387,19 +1422,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					function (fRequestComplete)
 					{
 						const tmpIDRecordsArray = Array.from(tmpEntityIDsToFetch);
-						const tmpMeadowFilterExpression = `FBL~ID${tmpEntityName}~INN~${tmpIDRecordsArray.join(',')}`;
-
-						this.getEntitySet(tmpEntityName, tmpMeadowFilterExpression,
-							(pError, pEntitySet) =>
-							{
-								if (pError)
-								{
-									this.log.error(`cacheConnectedEntityRecords error getting connected entity records for [${tmpEntityName}] with IDs [${tmpIDRecordsArray.join(',')}]: ${pError}`, { Stack: pError.stack });
-									return fRequestComplete(pError);
-								}
-								// The method automagically cached them for us!  Just move on to the next...
-								return fRequestComplete();
-							}, null, { Scope: pScope });
+						this.getEntitySetByIDListChunked(tmpEntityName, tmpIDRecordsArray, { Scope: pScope }, fRequestComplete);
 					}.bind(this));
 			}
 		}

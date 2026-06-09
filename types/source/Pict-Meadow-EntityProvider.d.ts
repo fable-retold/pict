@@ -34,9 +34,27 @@ declare class PictMeadowEntityProvider {
         Step: Record<string, any>;
     }>> | null;
     /**
-     * @param {string} pEntity - The name of the entity to initialize the cache for
+     * Compute the cache bucket key for an entity, optionally namespaced by a scope.
+     * A non-empty scope yields an isolated bucket (`Entity::Scope`) so scoped/partial
+     * (e.g. Lite) records never touch the global `Entity` cache that full-record
+     * consumers ({~E:~}, read views, pickers) rely on. Empty scope === today's key.
+     * @param {string} pEntity - The entity name.
+     * @param {string} [pScope] - Optional cache scope.
+     * @return {string} The cache bucket key.
      */
-    initializeCache(pEntity: string): void;
+    _cacheKey(pEntity: string, pScope?: string): string;
+    /**
+     * @param {string} pEntity - The name of the entity to initialize the cache for
+     * @param {string} [pScope] - Optional cache scope to namespace the bucket.
+     */
+    initializeCache(pEntity: string, pScope?: string): void;
+    /**
+     * Clear every cache bucket (record + record-set + Bundle map) belonging to a
+     * scope. Recordset lists call this at the start of each load (fresh prefetch,
+     * no stale list data) and on CRUD invalidation.
+     * @param {string} pScope - The cache scope to clear.
+     */
+    clearScope(pScope: string): void;
     /**
      * @param {object} pEntityInformation - The entity information object.
      * @param {object} pContext - The context object to use when parsing the filter template and assigning the results to the destination.
@@ -179,7 +197,7 @@ declare class PictMeadowEntityProvider {
      * @param {string|number} pIDRecord - The ID of the record to get.
      * @param {(pError?: Error, pRecord?: any) => void} fCallback - The callback function to call when the operation is complete.
      */
-    getEntity(pEntity: string, pIDRecord: string | number, fCallback: (pError?: Error, pRecord?: any) => void): void;
+    getEntity(pEntity: string, pIDRecord: string | number, fCallback: (pError?: Error, pRecord?: any) => void, pScope?: string): void;
     /**
      * For a given list of objects, cache connected entity records (use lazy loading of pages and not count requests).
      *
@@ -190,7 +208,22 @@ declare class PictMeadowEntityProvider {
      *
      * @return {void}
      */
-    cacheConnectedEntityRecordsWithoutCount(pRecordSet: any[], pIDListToCache: any[], pEntityListToCache: any[], pLiteRecords: boolean, fCallback: any): void;
+    cacheConnectedEntityRecordsWithoutCount(pRecordSet: any[], pIDListToCache: any[], pEntityListToCache: any[], pLiteRecords: boolean, fCallback: any, pScope?: string): void;
+    /**
+     * Fetch a set of entity records by primary-key ID list, chunking the meadow IN
+     * filter so the generated GET URL never exceeds HTTP/2 header-size limits on
+     * large sets (oversized URLs trip a connection-level reset that takes sibling
+     * multiplexed requests down with it). Records are cached as a side effect of
+     * getEntitySet; the callback returns no data.
+     *
+     * @param {string} pEntityName - The entity name (e.g. 'Project').
+     * @param {Array<number|string>} pIDRecordsArray - The primary-key IDs to fetch.
+     * @param {Object} pOptions - Options passed through to getEntitySet (Scope, NoCount, etc).
+     * @param {(error?: Error) => void} fCallback - Completion callback.
+     *
+     * @return {void}
+     */
+    getEntitySetByIDListChunked(pEntityName: string, pIDRecordsArray: Array<number | string>, pOptions: any, fCallback: (error?: Error) => void): void;
     /**
      * For a given list of objects, cache connected entity records.
      *
@@ -201,14 +234,14 @@ declare class PictMeadowEntityProvider {
      *
      * @return {void}
      */
-    cacheConnectedEntityRecords(pRecordSet: any[], pIDListToCache: any[], pEntityListToCache: any[], pLiteRecords: boolean, fCallback: any): void;
+    cacheConnectedEntityRecords(pRecordSet: any[], pIDListToCache: any[], pEntityListToCache: any[], pLiteRecords: boolean, fCallback: any, pScope?: string): void;
     /**
      * Cache an array of records, likely from a meadow endpoint
      *
      * @param {string} pEntity - The entity type to cache individual records for
      * @param {Array<Record<string, any>>} pRecordSet - An array of records to cache
      */
-    cacheIndividualEntityRecords(pEntity: string, pRecordSet: Array<Record<string, any>>): void;
+    cacheIndividualEntityRecords(pEntity: string, pRecordSet: Array<Record<string, any>>, pScope?: string): void;
     /**
      * @param {string} pEntity - The name of the entity to get.
      * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
@@ -216,15 +249,18 @@ declare class PictMeadowEntityProvider {
      * @param {number} pRecordCount - The number of records to return for pagination.
      * @param {(pError?: Error, pEntitySet?: Array<Record<string, any>>) => void} fCallback - The callback function to call when the operation is complete.
      * @param {string} [postfix] - Optional, adds a postfix string to the url.
+     * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default (e.g. a private-data-lake route).
+     * @param {Record<string, any>} [pOptions] - Optional { Scope, Projection }: cache scope and Lite/LiteExtended projection.
      */
-    getEntitySetPage(pEntity: string, pMeadowFilterExpression: string, pRecordStartCursor: number, pRecordCount: number, fCallback: (pError?: Error, pEntitySet?: Array<Record<string, any>>) => void, postfix?: string): any;
+    getEntitySetPage(pEntity: string, pMeadowFilterExpression: string, pRecordStartCursor: number, pRecordCount: number, fCallback: (pError?: Error, pEntitySet?: Array<Record<string, any>>) => void, postfix?: string, pURLPrefix?: string, pOptions?: Record<string, any>): any;
     /**
      * @param {string} pEntity - The name of the entity to get the count of.
      * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
      * @param {(pError?: Error, pRecordCount?: number) => void} fCallback - The callback function to call when the operation is complete.
      * @param {string} [postfix] - Optional, adds a postfix string to the count url
+     * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default.
      */
-    getEntitySetRecordCount(pEntity: string, pMeadowFilterExpression: string, fCallback: (pError?: Error, pRecordCount?: number) => void, postfix?: string): any;
+    getEntitySetRecordCount(pEntity: string, pMeadowFilterExpression: string, fCallback: (pError?: Error, pRecordCount?: number) => void, postfix?: string, pURLPrefix?: string): any;
     /**
      * @param {string} pEntity - The name of the entity to get.
      * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
