@@ -553,6 +553,18 @@ class FilterMeadowStanzaTokenGenerator
 				default:
 					this.log.warn(`Unknown filter type ${tmpFilterConfig.Type} in filter configuration.`, { FilterConfig: tmpFilterConfig });
 			}
+			// Per-clause URLPrefix knob: the remote-table resolution requests (the join lookup
+			// against RemoteTable) otherwise inherit the recordset entity provider's URLPrefix.
+			// When a clause's remote entity lives at a different API root than the recordset
+			// (e.g. a lake-backed recordset joining to a main-API entity), set URLPrefix on the
+			// clause to resolve the join there. The core-entity (recordset) request is unaffected.
+			if (tmpFilterConfig.URLPrefix)
+			{
+				for (const tmpRemoteResolutionFilter of tmpFilterResult.Filters)
+				{
+					tmpRemoteResolutionFilter.URLPrefix = tmpFilterConfig.URLPrefix;
+				}
+			}
 			if (tmpFilterResult.Filters.length > 0)
 			{
 				if (tmpFilterConfig.GUIDGroup)
@@ -773,7 +785,7 @@ class FilterMeadowStanzaTokenGenerator
 					}
 					if (!tmpGroupedFilters[tmpFilterGroupGUID])
 					{
-						tmpGroupedFilters[tmpFilterGroupGUID] = { Stanzas: [], ComputedIndex: tmpFilter.ComputedIndex, Entity: tmpFilter.Entity };
+						tmpGroupedFilters[tmpFilterGroupGUID] = { Stanzas: [], ComputedIndex: tmpFilter.ComputedIndex, Entity: tmpFilter.Entity, URLPrefix: tmpFilter.URLPrefix };
 					}
 					tmpGroupedFilters[tmpFilterGroupGUID].Stanzas.push(this._compileSimpleFilterToString(tmpFilter));
 				}
@@ -788,6 +800,7 @@ class FilterMeadowStanzaTokenGenerator
 							Type: 'MeadowEntity',
 							AllRecords: true,
 							Entity: tmpGroupedFilters[tmpFilterGroupKey].Entity,
+							URLPrefix: tmpGroupedFilters[tmpFilterGroupKey].URLPrefix,
 							Filter: tmpGroupedFilters[tmpFilterGroupKey].Stanzas.join('~'),
 							Destination: `State[Step${tmpGroupedFilters[tmpFilterGroupKey].ComputedIndex}]`,
 						});
