@@ -199,6 +199,20 @@ suite(
 								}
 							);
 						test(
+								'DateOnlyYMD renders empty for missing or invalid values (never today)',
+								function (fDone)
+								{
+									const testPict = new libPict(_MockSettings);
+									let tmpMissing = testPict.parseTemplate('[{~DateOnlyYMD:Record.AbsentPath~}]', { SomethingElse: 1 });
+									Expect(tmpMissing).to.equal('[]', 'absent path renders empty, not the current date');
+									let tmpEmpty = testPict.parseTemplate('[{~DateOnlyYMD:Record.EmptyDate~}]', { EmptyDate: '' });
+									Expect(tmpEmpty).to.equal('[]');
+									let tmpGarbage = testPict.parseTemplate('[{~DateOnlyYMD:Record.BadDate~}]', { BadDate: 'not-a-date' });
+									Expect(tmpGarbage).to.equal('[]', 'invalid dates render empty, not "Invalid Date"');
+									fDone();
+								}
+							);
+						test(
 								// Date library uses time zones from here: https://www.iana.org/time-zones
 								'Date values (with no time)',
 								function (fDone)

@@ -46,8 +46,20 @@ class PictTemplateProviderDateOnlyYMD extends libPictTemplate
 			this.log.trace(`PICT Template [fDateTimeYMD]::[${tmpHash}]`);
 		}
 
+		// A missing value must render as empty — dayjs.utc(undefined) is NOW,
+		// which silently writes today's date into absent date fields.
+		if (tmpDateValue === undefined || tmpDateValue === null || tmpDateValue === '')
+		{
+			return '';
+		}
+
 		// Because this is "Date Only", we force the time to be UTC 00:00:00 and go with the date part only.
 		let tmpDayJS = this.fable.Dates.dayJS.utc(tmpDateValue);
+
+		if (!tmpDayJS.isValid())
+		{
+			return '';
+		}
 
 		//FIXME: this is kind of wacked out; -62167219200000 is the unix ms timestamp for 0000-01-01 00:00:00 UTC
 		//       not even sure showing negative is right; showing the era is probably better (BCE vs CE)
