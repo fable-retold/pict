@@ -303,6 +303,9 @@ suite(
 					function(fDone)
 					{
 						const testPict = new libPict(_MockSettings);
+						// This test asserts the legacy GET read shape + call count; pin the
+						// transport to GET (the live test server advertises no capability).
+						testPict.EntityProvider.useQueryEndpoint = false;
 						const getJSONSpy = Sinon.spy(testPict.EntityProvider.restClient, 'getJSON');
 
 						testPict.EntityProvider.getEntitySet('Book', `FBV~IDBook~GT~190~FBV~IDBook~LT~200`, (err, recs) =>
@@ -330,6 +333,8 @@ suite(
 					function(fDone)
 					{
 						const testPict = new libPict(_MockSettings);
+						// Asserts legacy GET read counts; pin the transport to GET.
+						testPict.EntityProvider.useQueryEndpoint = false;
 						const getJSONSpy = Sinon.spy(testPict.EntityProvider.restClient, 'getJSON');
 
 						let tmpAnticipate = testPict.newAnticipate();
@@ -401,6 +406,8 @@ suite(
 					function(fDone)
 					{
 						const testPict = new libPict(_MockSettings);
+						// Asserts legacy GET read counts; pin the transport to GET.
+						testPict.EntityProvider.useQueryEndpoint = false;
 						const getJSONSpy = Sinon.spy(testPict.EntityProvider.restClient, 'getJSON');
 
 						let tmpAnticipate = testPict.newAnticipate();
@@ -572,6 +579,9 @@ suite(
 					function()
 					{
 						const testPict = new libPict(_MockSettings);
+						// Asserts the legacy GET URL shape; pin the transport to GET so no
+						// capability probe is issued ahead of the read.
+						testPict.EntityProvider.useQueryEndpoint = false;
 						const getJSONStub = Sinon.stub(testPict.EntityProvider.restClient, 'getJSON');
 
 						// A per-request prefix routes to a custom (e.g. private-data-lake) endpoint...
@@ -595,6 +605,8 @@ suite(
 					function()
 					{
 						const testPict = new libPict(_MockSettings);
+						// Asserts the legacy GET URL shape; pin the transport to GET.
+						testPict.EntityProvider.useQueryEndpoint = false;
 						const getJSONStub = Sinon.stub(testPict.EntityProvider.restClient, 'getJSON');
 
 						// The request def carries URLPrefix → it must reach getEntitySetPage's URL.
@@ -1125,5 +1137,312 @@ suite(
 				);
 			}
 		);
+
+			suite(
+				'Query Endpoint Capability Detection and Routing',
+				function()
+				{
+					// Schema bodies a server might return.
+					const _SchemaSupportedFlag = { title: 'Book', RetoldMetadata: { PackageVersions: { 'meadow-endpoints': '4.1.0' }, Capabilities: { QueryEndpoint: true } } };
+					const _SchemaSupportedVersionOnly = { title: 'Book', RetoldMetadata: { PackageVersions: { 'meadow-endpoints': '4.1.0' } } };
+					const _SchemaUnsupportedVersion = { title: 'Book', RetoldMetadata: { PackageVersions: { 'meadow-endpoints': '4.0.24' } } };
+					const _SchemaDisabledFlag = { title: 'Book', RetoldMetadata: { PackageVersions: { 'meadow-endpoints': '4.1.0' }, Capabilities: { QueryEndpoint: false } } };
+					const _SchemaLegacyNoMetadata = { title: 'Book', properties: { IDBook: {} } };
+
+					// Stub the rest client so a Schema probe returns pSchemaBody, GET reads
+					// return canned records/counts, and POST /Query returns the same. Both
+					// stubs are returned so a test can assert which transport was used.
+					const installRestStubs = (pProvider, pSchemaBody) =>
+					{
+						const tmpGetStub = Sinon.stub(pProvider.restClient, 'getJSON').callsFake(
+							(pOptionsOrURL, fCallback) =>
+							{
+								const tmpURL = (typeof pOptionsOrURL === 'string') ? pOptionsOrURL : pOptionsOrURL.url;
+								if (tmpURL.endsWith('/Schema'))
+								{
+									return fCallback(null, { statusCode: 200 }, pSchemaBody);
+								}
+								if (tmpURL.indexOf('/Count') !== -1)
+								{
+									return fCallback(null, { statusCode: 200 }, { Count: 3 });
+								}
+								return fCallback(null, { statusCode: 200 }, [ { IDBook: 1 }, { IDBook: 2 }, { IDBook: 3 } ]);
+							});
+						const tmpPostStub = Sinon.stub(pProvider.restClient, 'postJSON').callsFake(
+							(pOptions, fCallback) =>
+							{
+								if (pOptions.body && pOptions.body.Count)
+								{
+									return fCallback(null, { statusCode: 200 }, { Count: 3 });
+								}
+								return fCallback(null, { statusCode: 200 }, [ { IDBook: 1 }, { IDBook: 2 }, { IDBook: 3 } ]);
+							});
+						return { getStub: tmpGetStub, postStub: tmpPostStub };
+					};
+
+					const schemaProbeCount = (pGetStub) =>
+					{
+						return pGetStub.getCalls().filter((pCall) =>
+						{
+							const tmpURL = (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url;
+							return tmpURL.endsWith('/Schema');
+						}).length;
+					};
+
+					test(
+						'isMeadowEndpointsVersionQueryCapable is major-version aware',
+						function()
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							// 2.x: supported at/after 2.1.0
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('2.1.0')).to.equal(true);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('2.5.7')).to.equal(true);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('2.0.46')).to.equal(false);
+							// 3.x: never supported
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('3.0.0')).to.equal(false);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('3.9.9')).to.equal(false);
+							// 4.x: supported at/after 4.1.0 (NOT 4.0.x)
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('4.0.0')).to.equal(false);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('4.0.24')).to.equal(false);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('4.1.0')).to.equal(true);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('4.2.3')).to.equal(true);
+							// 5.x (unknown major): unsupported until explicitly added
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('5.0.0')).to.equal(false);
+							// Garbage
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable('not-a-version')).to.equal(false);
+							Expect(tmpProvider.isMeadowEndpointsVersionQueryCapable(undefined)).to.equal(false);
+						}
+					);
+
+					test(
+						'evaluateQueryEndpointSupport prefers the explicit flag, falls back to version',
+						function()
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							Expect(tmpProvider.evaluateQueryEndpointSupport(_SchemaSupportedFlag)).to.equal(true);
+							Expect(tmpProvider.evaluateQueryEndpointSupport(_SchemaSupportedVersionOnly)).to.equal(true);
+							Expect(tmpProvider.evaluateQueryEndpointSupport(_SchemaUnsupportedVersion)).to.equal(false);
+							// Explicit false flag wins even though the version would say yes.
+							Expect(tmpProvider.evaluateQueryEndpointSupport(_SchemaDisabledFlag)).to.equal(false);
+							// Older servers advertise nothing.
+							Expect(tmpProvider.evaluateQueryEndpointSupport(_SchemaLegacyNoMetadata)).to.equal(false);
+							Expect(tmpProvider.evaluateQueryEndpointSupport(null)).to.equal(false);
+						}
+					);
+
+					test(
+						'supported server: count + page reads route through POST /Query',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaSupportedFlag);
+
+							// A filter long enough to blow past a GET URI limit.
+							const tmpLongFilter = `FBL~IDBook~INN~${Array.from({ length: 4000 }, (pUnused, pI) => { return pI; }).join(',')}`;
+
+							tmpProvider.getEntitySet('Book', tmpLongFilter,
+								(pError, pRecords) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(pRecords).to.be.an('array');
+										Expect(pRecords.length).to.equal(3);
+										// Exactly one Schema probe — and never a GET read.
+										Expect(schemaProbeCount(tmpStubs.getStub)).to.equal(1);
+										const tmpNonSchemaGets = tmpStubs.getStub.getCalls().filter((pCall) => { const u = (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; return !u.endsWith('/Schema'); });
+										Expect(tmpNonSchemaGets.length).to.equal(0);
+										// Count + at least one page, all via POST /Query.
+										Expect(tmpStubs.postStub.callCount).to.be.at.least(2);
+										tmpStubs.postStub.getCalls().forEach((pCall) =>
+										{
+											Expect(pCall.args[0].url).to.equal('http://localhost:8086/1.0/Books/Query');
+										});
+										const tmpCountCall = tmpStubs.postStub.getCalls().find((pCall) => { return pCall.args[0].body && pCall.args[0].body.Count; });
+										Expect(tmpCountCall).to.exist;
+										Expect(tmpCountCall.args[0].body.Filter).to.equal(tmpLongFilter);
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'unsupported server: reads fall back to GET, POST /Query is never used',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaLegacyNoMetadata);
+
+							tmpProvider.getEntitySet('Book', 'FBV~Genre~EQ~SciFi',
+								(pError, pRecords) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(pRecords).to.be.an('array');
+										Expect(pRecords.length).to.equal(3);
+										// POST /Query must NOT be used against a server that does not advertise it.
+										Expect(tmpStubs.postStub.callCount).to.equal(0);
+										// GET reads carry the legacy /FilteredTo/ + /Count URL shape.
+										const tmpURLs = tmpStubs.getStub.getCalls().map((pCall) => { return (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; });
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/Count/FilteredTo/FBV~Genre~EQ~SciFi') !== -1; })).to.equal(true);
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/FilteredTo/FBV~Genre~EQ~SciFi/') !== -1; })).to.equal(true);
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'capability is probed once per entity and cached for the session',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaSupportedFlag);
+
+							tmpProvider.getEntitySetRecordCount('Book', 'FBV~Genre~EQ~SciFi',
+								() =>
+								{
+									tmpProvider.getEntitySetRecordCount('Book', 'FBV~Genre~EQ~Thriller',
+										() =>
+										{
+											try
+											{
+												Expect(schemaProbeCount(tmpStubs.getStub)).to.equal(1);
+											}
+											catch (pAssertError)
+											{
+												return fDone(pAssertError);
+											}
+											return fDone();
+										});
+								});
+						}
+					);
+
+					test(
+						'primeEntityCapabilityFromSchema seeds the cache without a probe',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							// Seed support from a schema the caller already holds.
+							Expect(tmpProvider.primeEntityCapabilityFromSchema('Book', _SchemaSupportedFlag)).to.equal(true);
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaLegacyNoMetadata);
+
+							tmpProvider.getEntitySetRecordCount('Book', 'FBV~Genre~EQ~SciFi',
+								(pError, pCount) =>
+								{
+									try
+									{
+										Expect(pCount).to.equal(3);
+										// No Schema probe (seeded), and the count went via POST /Query.
+										Expect(schemaProbeCount(tmpStubs.getStub)).to.equal(0);
+										Expect(tmpStubs.postStub.callCount).to.equal(1);
+										Expect(tmpStubs.postStub.getCall(0).args[0].body.Count).to.equal(true);
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'useQueryEndpoint=false disables probing and forces GET',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							tmpProvider.useQueryEndpoint = false;
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaSupportedFlag);
+
+							tmpProvider.getEntitySetRecordCount('Book', 'FBV~Genre~EQ~SciFi',
+								(pError, pCount) =>
+								{
+									try
+									{
+										Expect(pCount).to.equal(3);
+										Expect(tmpStubs.postStub.callCount).to.equal(0);
+										Expect(schemaProbeCount(tmpStubs.getStub)).to.equal(0);
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'supported: getEntitySetByIDListChunked sends the whole list in one POST /Query',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaSupportedFlag);
+							const tmpIDs = Array.from({ length: 1000 }, (pUnused, pI) => { return pI + 1; });
+
+							tmpProvider.getEntitySetByIDListChunked('Book', tmpIDs, { NoCount: true }, (pError) =>
+							{
+								try
+								{
+									Expect(pError).to.not.exist;
+									// One chunk -> one POST /Query carrying all 1000 IDs (no 200-ID GET chunking).
+									Expect(tmpStubs.postStub.callCount).to.equal(1);
+									Expect(tmpStubs.postStub.getCall(0).args[0].url).to.equal('http://localhost:8086/1.0/Books/Query');
+									const tmpFilter = tmpStubs.postStub.getCall(0).args[0].body.Filter;
+									Expect(tmpFilter.indexOf('FBL~IDBook~INN~')).to.equal(0);
+									Expect(tmpFilter.split(',').length).to.equal(1000);
+									// No GET reads (only the Schema probe).
+									const tmpNonSchemaGets = tmpStubs.getStub.getCalls().filter((pCall) => { const u = (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; return !u.endsWith('/Schema'); });
+									Expect(tmpNonSchemaGets.length).to.equal(0);
+								}
+								catch (pAssertError)
+								{
+									return fDone(pAssertError);
+								}
+								return fDone();
+							});
+						}
+					);
+
+					test(
+						'unsupported: getEntitySetByIDListChunked still chunks to 200-ID GET reads',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							const tmpStubs = installRestStubs(tmpProvider, _SchemaLegacyNoMetadata);
+							const tmpIDs = Array.from({ length: 1000 }, (pUnused, pI) => { return pI + 1; });
+
+							tmpProvider.getEntitySetByIDListChunked('Book', tmpIDs, { NoCount: true }, (pError) =>
+							{
+								try
+								{
+									Expect(pError).to.not.exist;
+									Expect(tmpStubs.postStub.callCount).to.equal(0);
+									// 1000 IDs / 200 per chunk = 5 GET reads, none oversized.
+									const tmpNonSchemaGets = tmpStubs.getStub.getCalls().filter((pCall) => { const u = (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; return !u.endsWith('/Schema'); });
+									Expect(tmpNonSchemaGets.length).to.equal(5);
+								}
+								catch (pAssertError)
+								{
+									return fDone(pAssertError);
+								}
+								return fDone();
+							});
+						}
+					);
+				}
+			);
 	}
 );

@@ -1,5 +1,16 @@
 const libFableServiceBase = require('fable').ServiceProviderBase;
 
+// Minimum meadow-endpoints version, per major, that serves the body-driven
+// POST /:Entity/Query read route. The route was added in 2.1.0 and 4.1.0 but
+// never shipped on the 3.x line or 4.0.x — so support is NOT monotonic across
+// majors and a flat ">= x" comparison would be wrong. Used only as a fallback
+// when the server does not advertise an explicit Capabilities flag.
+const QUERY_ENDPOINT_MIN_VERSION_BY_MAJOR =
+{
+	2: '2.1.0',
+	4: '4.1.0'
+};
+
 class PictMeadowEntityProvider extends libFableServiceBase
 {
 	constructor(pFable, pOptions, pServiceHash)
@@ -74,6 +85,322 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		 * @type {Array<Array<{Index: number, Step: Record<string, any>}>>|null}
 		 */
 		this.lastBundleWaves = null;
+
+		// Master switch for the body-driven POST /:Entity/Query transport. When
+		// false the provider always uses the legacy GET reads (no capability
+		// probe is ever issued). Defaults on; opt out via option or setting.
+		if (typeof this.options.UseQueryEndpoint === 'boolean')
+		{
+			this.useQueryEndpoint = this.options.UseQueryEndpoint;
+		}
+		else if (typeof this.fable.settings.PictMeadowUseQueryEndpoint === 'boolean')
+		{
+			this.useQueryEndpoint = this.fable.settings.PictMeadowUseQueryEndpoint;
+		}
+		else
+		{
+			this.useQueryEndpoint = true;
+		}
+
+		/**
+		 * Per-(urlPrefix, entity) capability cache. Different entities can resolve
+		 * to different backend services (and thus different meadow-endpoints
+		 * versions) behind the same urlPrefix, so support is cached per entity.
+		 * @type {Record<string, { SupportsQuery: boolean, Metadata: (Record<string, any>|null) }>}
+		 */
+		this.endpointCapabilityCache = {};
+		/**
+		 * In-flight capability probes, keyed identically to the cache, so
+		 * concurrent reads of the same entity collapse onto a single Schema probe.
+		 * @type {Record<string, Array<(pError: Error|null, pSupportsQuery: boolean) => void>>}
+		 */
+		this.endpointCapabilityInflight = {};
+	}
+
+	/**
+	 * Compute the capability cache key for an (entity, urlPrefix) pair.
+	 *
+	 * @param {string} pEntity - The entity name.
+	 * @param {string} [pURLPrefix] - The URL prefix in play (defaults to the provider default).
+	 * @return {string} The cache key.
+	 */
+	_capabilityKey(pEntity, pURLPrefix)
+	{
+		return `${pURLPrefix || this.options.urlPrefix}::${pEntity}`;
+	}
+
+	/**
+	 * Major-version-aware check of whether a meadow-endpoints version string
+	 * serves the POST /:Entity/Query route. Support is keyed off the major
+	 * version (see QUERY_ENDPOINT_MIN_VERSION_BY_MAJOR) because the route was
+	 * backported to 2.1.0 and added in 4.1.0, but absent on 3.x and 4.0.x.
+	 *
+	 * @param {string} pVersion - A semver string (e.g. '4.1.0').
+	 * @return {boolean} True if the version is known to serve the Query route.
+	 */
+	isMeadowEndpointsVersionQueryCapable(pVersion)
+	{
+		if (typeof pVersion !== 'string')
+		{
+			return false;
+		}
+		const tmpParts = pVersion.split('.').map((pPart) => { return parseInt(pPart, 10); });
+		if (tmpParts.length < 1 || isNaN(tmpParts[0]))
+		{
+			return false;
+		}
+		const tmpMajor = tmpParts[0];
+		const tmpMinimum = QUERY_ENDPOINT_MIN_VERSION_BY_MAJOR[tmpMajor];
+		if (!tmpMinimum)
+		{
+			return false;
+		}
+		const tmpMinimumParts = tmpMinimum.split('.').map((pPart) => { return parseInt(pPart, 10); });
+		// Lexicographic compare of [major, minor, patch] with missing parts as 0.
+		for (let i = 0; i < 3; i++)
+		{
+			const tmpHave = isNaN(tmpParts[i]) ? 0 : tmpParts[i];
+			const tmpNeed = isNaN(tmpMinimumParts[i]) ? 0 : tmpMinimumParts[i];
+			if (tmpHave > tmpNeed)
+			{
+				return true;
+			}
+			if (tmpHave < tmpNeed)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Decide, from a Schema endpoint response body, whether the serving
+	 * meadow-endpoints supports the POST /:Entity/Query route. An explicit
+	 * Capabilities flag wins when present; otherwise fall back to a
+	 * major-version-aware check of the advertised meadow-endpoints version.
+	 * Servers that advertise nothing (older deployments) are unsupported.
+	 *
+	 * @param {Record<string, any>} pSchemaBody - The Schema endpoint response body.
+	 * @return {boolean} True if POST /:Entity/Query is supported.
+	 */
+	evaluateQueryEndpointSupport(pSchemaBody)
+	{
+		if (!pSchemaBody || typeof pSchemaBody !== 'object')
+		{
+			return false;
+		}
+		const tmpMetadata = pSchemaBody.RetoldMetadata;
+		if (!tmpMetadata || typeof tmpMetadata !== 'object')
+		{
+			return false;
+		}
+		if (tmpMetadata.Capabilities && typeof tmpMetadata.Capabilities.QueryEndpoint === 'boolean')
+		{
+			return tmpMetadata.Capabilities.QueryEndpoint;
+		}
+		const tmpVersion = tmpMetadata.PackageVersions && tmpMetadata.PackageVersions['meadow-endpoints'];
+		if (typeof tmpVersion === 'string')
+		{
+			return this.isMeadowEndpointsVersionQueryCapable(tmpVersion);
+		}
+		return false;
+	}
+
+	/**
+	 * Seed the capability cache for an entity from a Schema response the caller
+	 * already has in hand (e.g. pict-section-recordset fetches the schema during
+	 * initialization). Avoids a redundant capability probe.
+	 *
+	 * @param {string} pEntity - The entity name.
+	 * @param {Record<string, any>} pSchemaBody - The Schema endpoint response body.
+	 * @param {string} [pURLPrefix] - The URL prefix the schema was fetched from.
+	 * @return {boolean} The resolved support value now cached.
+	 */
+	primeEntityCapabilityFromSchema(pEntity, pSchemaBody, pURLPrefix)
+	{
+		const tmpSupportsQuery = this.evaluateQueryEndpointSupport(pSchemaBody);
+		this.endpointCapabilityCache[this._capabilityKey(pEntity, pURLPrefix)] =
+			{
+				SupportsQuery: tmpSupportsQuery,
+				Metadata: (pSchemaBody && pSchemaBody.RetoldMetadata) || null
+			};
+		return tmpSupportsQuery;
+	}
+
+	/**
+	 * Resolve whether POST /:Entity/Query is usable for an entity, probing the
+	 * Schema endpoint once and caching the result per (urlPrefix, entity).
+	 * Concurrent calls for the same key collapse onto a single probe.
+	 *
+	 * Probe failures (network/parse) are NOT cached — they resolve to false (GET
+	 * fallback) for this call but allow a later retry, so a transient blip does
+	 * not permanently disable the faster transport for the session. A successful
+	 * probe of an older server (no metadata) caches false and never re-probes.
+	 *
+	 * @param {string} pEntity - The entity name.
+	 * @param {string} pURLPrefix - The URL prefix in play.
+	 * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback.
+	 * @return {void}
+	 */
+	resolveEntityQuerySupport(pEntity, pURLPrefix, fCallback)
+	{
+		if (!this.useQueryEndpoint)
+		{
+			return fCallback(null, false);
+		}
+		const tmpKey = this._capabilityKey(pEntity, pURLPrefix);
+		if (tmpKey in this.endpointCapabilityCache)
+		{
+			return fCallback(null, this.endpointCapabilityCache[tmpKey].SupportsQuery);
+		}
+		if (this.endpointCapabilityInflight[tmpKey])
+		{
+			this.endpointCapabilityInflight[tmpKey].push(fCallback);
+			return;
+		}
+		this.endpointCapabilityInflight[tmpKey] = [ fCallback ];
+
+		/** @type {Record<string, any>} */
+		let tmpOptions = ({ url: `${pURLPrefix || this.options.urlPrefix}${pEntity}/Schema` });
+		tmpOptions = this.prepareRequestOptions(tmpOptions);
+
+		this.restClient.getJSON(tmpOptions,
+			(pError, pResponse, pBody) =>
+			{
+				let tmpSupportsQuery = false;
+				if (!pError)
+				{
+					try
+					{
+						tmpSupportsQuery = this.evaluateQueryEndpointSupport(pBody);
+					}
+					catch (pEvaluateError)
+					{
+						tmpSupportsQuery = false;
+					}
+					// Only cache on a clean probe; transient errors stay re-probeable.
+					this.endpointCapabilityCache[tmpKey] =
+						{
+							SupportsQuery: tmpSupportsQuery,
+							Metadata: (pBody && pBody.RetoldMetadata) || null
+						};
+				}
+				else
+				{
+					this.log.warn(`EntityProvider capability probe for [${pEntity}] failed; falling back to GET reads: ${pError}`);
+				}
+				const tmpCallbacks = this.endpointCapabilityInflight[tmpKey];
+				delete this.endpointCapabilityInflight[tmpKey];
+				for (let i = 0; i < tmpCallbacks.length; i++)
+				{
+					tmpCallbacks[i](null, tmpSupportsQuery);
+				}
+			});
+	}
+
+	/**
+	 * Build the POST /:Entity/Query request body for a filtered read.
+	 *
+	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
+	 * @param {number|null} [pBegin] - Pagination start cursor.
+	 * @param {number|null} [pCap] - Pagination page size.
+	 * @param {Record<string, any>} [pProjection] - Optional { Mode:'LiteExtended', ExtraColumns:[...] }.
+	 * @return {Record<string, any>} The request body envelope.
+	 */
+	_buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, pProjection)
+	{
+		/** @type {Record<string, any>} */
+		const tmpBody = {};
+		if (pMeadowFilterExpression)
+		{
+			tmpBody.Filter = pMeadowFilterExpression;
+		}
+		if (typeof pBegin === 'number')
+		{
+			tmpBody.Begin = pBegin;
+		}
+		if (typeof pCap === 'number')
+		{
+			tmpBody.Cap = pCap;
+		}
+		if (pProjection && pProjection.Mode === 'LiteExtended' && Array.isArray(pProjection.ExtraColumns) && pProjection.ExtraColumns.length > 0)
+		{
+			// LiteExtended GET maps to a Lite read carrying ExtraColumns on Query.
+			tmpBody.Lite = true;
+			tmpBody.ExtraColumns = pProjection.ExtraColumns.join(',');
+		}
+		return tmpBody;
+	}
+
+	/**
+	 * Read a page of an entity set, using POST /:Entity/Query when supported and
+	 * falling back to the legacy GET read otherwise. The callback mirrors
+	 * restClient.getJSON exactly: (pError, pResponse, pBody).
+	 *
+	 * @param {string} pEntity - The entity name.
+	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
+	 * @param {number|null} pBegin - Pagination start cursor (null for unpaged).
+	 * @param {number|null} pCap - Pagination page size (null for unpaged).
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix, Projection }.
+	 * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
+	 * @return {void}
+	 */
+	_readEntityPage(pEntity, pMeadowFilterExpression, pBegin, pCap, pReadOptions, fCallback)
+	{
+		const tmpURLPrefix = (pReadOptions && pReadOptions.URLPrefix) || this.options.urlPrefix;
+		const tmpPostfix = (pReadOptions && pReadOptions.Postfix) || '';
+		const tmpProjection = pReadOptions ? pReadOptions.Projection : null;
+
+		if (pReadOptions && pReadOptions.SupportsQuery)
+		{
+			const tmpRequestOptions = (
+				{
+					url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,
+					body: this._buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, tmpProjection)
+				});
+			return this.restClient.postJSON(tmpRequestOptions, fCallback);
+		}
+
+		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
+		const tmpProjectionStanza = (tmpProjection && tmpProjection.Mode === 'LiteExtended' && Array.isArray(tmpProjection.ExtraColumns) && tmpProjection.ExtraColumns.length > 0)
+			? `/LiteExtended/${tmpProjection.ExtraColumns.join(',')}`
+			: '';
+		const tmpPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
+		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;
+		return this.restClient.getJSON(tmpURL, fCallback);
+	}
+
+	/**
+	 * Read the count of an entity set, using POST /:Entity/Query (Count mode)
+	 * when supported and the legacy GET Count otherwise. The callback mirrors
+	 * restClient.getJSON: (pError, pResponse, pBody) where pBody carries .Count.
+	 *
+	 * @param {string} pEntity - The entity name.
+	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix }.
+	 * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
+	 * @return {void}
+	 */
+	_readEntityCount(pEntity, pMeadowFilterExpression, pReadOptions, fCallback)
+	{
+		const tmpURLPrefix = (pReadOptions && pReadOptions.URLPrefix) || this.options.urlPrefix;
+		const tmpPostfix = (pReadOptions && pReadOptions.Postfix) || '';
+
+		if (pReadOptions && pReadOptions.SupportsQuery)
+		{
+			const tmpBody = this._buildQueryReadBody(pMeadowFilterExpression, null, null, null);
+			tmpBody.Count = true;
+			const tmpRequestOptions = (
+				{
+					url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,
+					body: tmpBody
+				});
+			return this.restClient.postJSON(tmpRequestOptions, fCallback);
+		}
+
+		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
+		const tmpURL = `${tmpURLPrefix}${pEntity}s/Count${tmpFilterStanza}${tmpPostfix}`;
+		return this.restClient.getJSON(tmpURL, fCallback);
 	}
 
 	/**
@@ -542,7 +869,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	projectDataset(pConfiguration, pContext)
 	{
 		let tmpInputRecordset = this.fable.manifest.getValueByHash(pContext, pConfiguration.InputRecordsetAddress);
-		if (typeof tmpInputRecordset == null || typeof tmpInputRecordset !== 'object')
+		if (tmpInputRecordset == null || typeof tmpInputRecordset !== 'object')
 		{
 			throw new Error(`EntityBundleRequest failed to project dataset because the input recordset [${pConfiguration.InputRecordsetAddress}] did not return an valid object.`);
 		}
@@ -1310,14 +1637,21 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 	/**
 	 * Fetch a set of entity records by primary-key ID list, chunking the meadow IN
-	 * filter so the generated GET URL never exceeds HTTP/2 header-size limits on
-	 * large sets (oversized URLs trip a connection-level reset that takes sibling
-	 * multiplexed requests down with it). Records are cached as a side effect of
-	 * getEntitySet; the callback returns no data.
+	 * filter into requests.
+	 *
+	 * Chunk size is capability-aware: the legacy GET read embeds the IN-list in
+	 * the URL, so it is chunked small (ConnectedEntityIDChunkSize, default 200) to
+	 * keep the URL under HTTP/2 header-size limits — oversized URLs trip a
+	 * connection-level reset that takes sibling multiplexed requests down with it.
+	 * When the endpoint serves POST /:Entity/Query the IN-list rides in the body
+	 * (no URI limit), so a much larger chunk is used (ConnectedEntityIDQueryChunkSize,
+	 * default 5000) — bounding response size rather than URL length, and collapsing
+	 * what used to be many small requests into one (or a few). Records are cached
+	 * as a side effect of getEntitySet; the callback returns no data.
 	 *
 	 * @param {string} pEntityName - The entity name (e.g. 'Project').
 	 * @param {Array<number|string>} pIDRecordsArray - The primary-key IDs to fetch.
-	 * @param {Object} pOptions - Options passed through to getEntitySet (Scope, NoCount, etc).
+	 * @param {Object} pOptions - Options passed through to getEntitySet (Scope, NoCount, URLPrefix, etc).
 	 * @param {(error?: Error) => void} fCallback - Completion callback.
 	 *
 	 * @return {void}
@@ -1329,30 +1663,42 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			return fCallback();
 		}
 
-		const tmpAnticipate = this.fable.newAnticipate();
-		const tmpChunkSize = (this.options && this.options.ConnectedEntityIDChunkSize) || 200;
+		const tmpOptions = pOptions || {};
 
-		for (let i = 0; i < pIDRecordsArray.length; i += tmpChunkSize)
-		{
-			const tmpIDChunk = pIDRecordsArray.slice(i, i + tmpChunkSize);
-			tmpAnticipate.anticipate(
-				function (fChunkComplete)
+		// Resolve transport capability once (cached; getEntitySet reuses it) so the
+		// chunk size matches the transport. The probe URL prefix matches the one
+		// getEntitySet will read from tmpOptions.URLPrefix.
+		this.resolveEntityQuerySupport(pEntityName, tmpOptions.URLPrefix,
+			(pSupportError, pSupportsQuery) =>
+			{
+				const tmpChunkSize = pSupportsQuery
+					? ((this.options && this.options.ConnectedEntityIDQueryChunkSize) || 5000)
+					: ((this.options && this.options.ConnectedEntityIDChunkSize) || 200);
+
+				const tmpAnticipate = this.fable.newAnticipate();
+
+				for (let i = 0; i < pIDRecordsArray.length; i += tmpChunkSize)
 				{
-					const tmpMeadowFilterExpression = `FBL~ID${pEntityName}~INN~${tmpIDChunk.join(',')}`;
-					this.getEntitySet(pEntityName, tmpMeadowFilterExpression,
-						(pError) =>
+					const tmpIDChunk = pIDRecordsArray.slice(i, i + tmpChunkSize);
+					tmpAnticipate.anticipate(
+						function (fChunkComplete)
 						{
-							if (pError)
-							{
-								this.log.error(`getEntitySetByIDListChunked error getting connected entity records for [${pEntityName}] with IDs [${tmpIDChunk.join(',')}]: ${pError}`, { Stack: pError.stack });
-								return fChunkComplete(pError);
-							}
-							return fChunkComplete();
-						}, null, pOptions);
-				}.bind(this));
-		}
+							const tmpMeadowFilterExpression = `FBL~ID${pEntityName}~INN~${tmpIDChunk.join(',')}`;
+							this.getEntitySet(pEntityName, tmpMeadowFilterExpression,
+								(pError) =>
+								{
+									if (pError)
+									{
+										this.log.error(`getEntitySetByIDListChunked error getting connected entity records for [${pEntityName}] with IDs [${tmpIDChunk.join(',')}]: ${pError}`, { Stack: pError.stack });
+										return fChunkComplete(pError);
+									}
+									return fChunkComplete();
+								}, null, tmpOptions);
+						}.bind(this));
+				}
 
-		tmpAnticipate.wait(fCallback);
+				tmpAnticipate.wait(fCallback);
+			});
 	}
 
 	/**
@@ -1484,39 +1830,40 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 */
 	getEntitySetPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount, fCallback, postfix = '', pURLPrefix = '', pOptions = {})
 	{
-		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		// LiteExtended projection: fetch only ID/GUID/owner/update + the requested
-		// ExtraColumns (drops blob columns). Used by scoped list fetches to avoid the
-		// heavy full-record payload.
-		const tmpProjectionStanza = (pOptions && pOptions.Projection && pOptions.Projection.Mode === 'LiteExtended' && Array.isArray(pOptions.Projection.ExtraColumns) && pOptions.Projection.ExtraColumns.length > 0)
-			? `/LiteExtended/${pOptions.Projection.ExtraColumns.join(',')}`
-			: '';
 		const tmpScope = (pOptions && pOptions.Scope) ? pOptions.Scope : '';
 		// Per-request URL prefix override (positional, e.g. a private-data-lake route);
 		// also accepted via pOptions.URLPrefix. Falls back to the provider default.
 		const tmpURLPrefix = pURLPrefix || (pOptions && pOptions.URLPrefix) || this.options.urlPrefix;
-		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}/${pRecordStartCursor}/${pRecordCount}`;
+		// LiteExtended projection: fetch only ID/GUID/owner/update + the requested
+		// ExtraColumns (drops blob columns). Used by scoped list fetches to avoid the
+		// heavy full-record payload.
+		const tmpProjection = (pOptions && pOptions.Projection) ? pOptions.Projection : null;
 
-		return this.restClient.getJSON(tmpURL + (postfix || ''),
-			function (pDownloadError, pDownloadResponse, pDownloadBody)
+		this.resolveEntityQuerySupport(pEntity, tmpURLPrefix,
+			(pSupportError, pSupportsQuery) =>
 			{
-				if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
-				{
-					this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}] from url [${tmpURL}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-					return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}] from url [${tmpURL}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
-				}
+				this._readEntityPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount,
+					{ SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection },
+					(pDownloadError, pDownloadResponse, pDownloadBody) =>
+					{
+						if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
+						{
+							this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
+							return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
+						}
 
-				// Do not cache projected (Lite/partial) records in the entity cache — a
-				// partial record would shadow the full record for other consumers
-				// (row-click View, {~E:~}). Projected fetches are rendered straight from
-				// the list state and never need to be in the entity cache.
-				if (!(pOptions && pOptions.Projection))
-				{
-					this.cacheIndividualEntityRecords(pEntity, pDownloadBody, tmpScope);
-				}
+						// Do not cache projected (Lite/partial) records in the entity cache — a
+						// partial record would shadow the full record for other consumers
+						// (row-click View, {~E:~}). Projected fetches are rendered straight from
+						// the list state and never need to be in the entity cache.
+						if (!tmpProjection)
+						{
+							this.cacheIndividualEntityRecords(pEntity, pDownloadBody, tmpScope);
+						}
 
-				return fCallback(pDownloadError, pDownloadBody);
-			}.bind(this));
+						return fCallback(pDownloadError, pDownloadBody);
+					});
+			});
 	}
 
 	/**
@@ -1528,29 +1875,31 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 */
 	getEntitySetRecordCount(pEntity, pMeadowFilterExpression, fCallback, postfix = '', pURLPrefix = '')
 	{
-		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpURL = `${pURLPrefix || this.options.urlPrefix}${pEntity}s/Count${tmpFilterStanza}`;
-
-		return this.restClient.getJSON(tmpURL + (postfix || ''),
-			function (pError, pResponse, pBody)
+		this.resolveEntityQuerySupport(pEntity, pURLPrefix,
+			(pSupportError, pSupportsQuery) =>
 			{
-				if (pResponse && pResponse.statusCode && pResponse.statusCode >= 400)
-				{
-					this.log.error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}] from url [${tmpURL}]: ${pResponse.statusCode} ${pResponse.statusMessage}`);
-					return fCallback(new Error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}] from url [${tmpURL}]: ${pResponse.statusCode} ${JSON.stringify(pBody || {})}`));
-				}
-				if (pError)
-				{
-					this.log.error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}] from url [${tmpURL}]: ${pError}`);
-					return fCallback(pError);
-				}
-				let tmpRecordCount = 0;
-				if (pBody.Count)
-				{
-					tmpRecordCount = pBody.Count;
-				}
-				return fCallback(pError, tmpRecordCount);
-			}.bind(this));
+				this._readEntityCount(pEntity, pMeadowFilterExpression,
+					{ SupportsQuery: pSupportsQuery, URLPrefix: pURLPrefix || '', Postfix: postfix || '' },
+					(pError, pResponse, pBody) =>
+					{
+						if (pResponse && pResponse.statusCode && pResponse.statusCode >= 400)
+						{
+							this.log.error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pResponse.statusCode} ${pResponse.statusMessage}`);
+							return fCallback(new Error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pResponse.statusCode} ${JSON.stringify(pBody || {})}`));
+						}
+						if (pError)
+						{
+							this.log.error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pError}`);
+							return fCallback(pError);
+						}
+						let tmpRecordCount = 0;
+						if (pBody && pBody.Count)
+						{
+							tmpRecordCount = pBody.Count;
+						}
+						return fCallback(pError, tmpRecordCount);
+					});
+			});
 	}
 
 	/**
@@ -1659,131 +2008,137 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	getEntitySet(pEntity, pMeadowFilterExpression, fCallback, postfix = '', pOptions = {})
 	{
 		const tmpURLPrefix = pOptions.URLPrefix || this.options.urlPrefix;
-		// TODO: Should we test for too many record IDs here by string length in pMeadowFilterExpression?
-		//       FBL~ID${pDestinationEntity}~INN~${tmpIDRecordsCommaSeparated}
-		//       If the list is mega-long we can parse it and break it into chunks.
 		const tmpScope = (pOptions && pOptions.Scope) ? pOptions.Scope : '';
 		this.initializeCache(pEntity, tmpScope);
 		const tmpCacheKey = this._cacheKey(pEntity, tmpScope);
-		// Discard anything from the cache that has expired or is over size.
-		this.recordSetCache[tmpCacheKey].prune(
-			function ()
+
+		// Resolve transport capability once for the whole read (count + every
+		// page share the same SupportsQuery flag). The legacy GET reads embed the
+		// filter (and any large IN-list) in the URI, which is exactly the long-URI
+		// failure POST /:Entity/Query avoids when the server supports it.
+		this.resolveEntityQuerySupport(pEntity, tmpURLPrefix,
+			(pSupportError, pSupportsQuery) =>
 			{
-				let tmpPossibleRecords = this.recordSetCache[tmpCacheKey].read(pMeadowFilterExpression);
+				const tmpReadOptions = { SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '' };
 
-				if (tmpPossibleRecords)
-				{
-					return fCallback(null, tmpPossibleRecords);
-				}
-				if (pOptions.NoCount)
-				{
-					// Lazily load until we hit a not full page rather than using couns.
-					// Does not respect parallelization.
-					const pageSize = 250;
-					let page = 0;
-					let returnSet = [];
-					const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-					const recursiveCallback = (pDownloadError, pDownloadResponse, pDownloadBody) => 
+				// Discard anything from the cache that has expired or is over size.
+				this.recordSetCache[tmpCacheKey].prune(
+					function ()
 					{
-						if ((pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400) || !Array.isArray(pDownloadBody))
+						let tmpPossibleRecords = this.recordSetCache[tmpCacheKey].read(pMeadowFilterExpression);
+
+						if (tmpPossibleRecords)
 						{
-							this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-							return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`), []);
+							return fCallback(null, tmpPossibleRecords);
 						}
-
-						returnSet = returnSet.concat(pDownloadBody);
-
-						if (pDownloadBody?.length < pageSize)
+						if (pOptions.NoCount)
 						{
-							this.recordSetCache[tmpCacheKey].put(returnSet, pMeadowFilterExpression);
-
-							this.cacheIndividualEntityRecords(pEntity, returnSet, tmpScope);
-							fCallback(null, returnSet);
-						}
-						else
-						{
-							page += 1;
-							this.restClient.getJSON(`${tmpURLPrefix}${pEntity}s${tmpFilterStanza}/${page * pageSize}/${pageSize}` + (postfix || ''), recursiveCallback);
-						}
-					};
-					return this.restClient.getJSON(`${tmpURLPrefix}${pEntity}s${tmpFilterStanza}/${page * pageSize}/${pageSize}` + (postfix || ''), recursiveCallback);
-				}
-				return this.getEntitySetRecordCount(pEntity, pMeadowFilterExpression,
-					(pRecordCountError, pRecordCount) =>
-					{
-						if (pRecordCountError)
-						{
-							return fCallback(pRecordCountError);
-						}
-						let tmpRecordCount = pRecordCount;
-
-						if (isNaN(pRecordCount))
-						{
-							this.log.error(`Entity count did not return a number for [${pEntity}] filtered to [${pMeadowFilterExpression}]... something is fatally wrong from the server accessed in getEntitySet call.`);
-							return fCallback(new Error('Entity count did not return a number in getEntitySet.'));
-						}
-
-						let tmpDownloadBatchSize = this.options.downloadBatchSize;
-						const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-						const tmpPageCount = Math.ceil(tmpRecordCount / tmpDownloadBatchSize);
-
-						// Build an indexed array of page descriptors to preserve ordering
-						const tmpPages = [];
-						for (let i = 0; i < tmpPageCount; i++)
-						{
-							tmpPages.push({
-								Index: i,
-								URL: `${tmpURLPrefix}${pEntity}s${tmpFilterStanza}/${i * tmpDownloadBatchSize}/${tmpDownloadBatchSize}`,
-								Records: null
-							});
-						}
-
-						// Fetch pages concurrently and reassemble in order.
-						// Per-call DownloadPageConcurrency overrides the provider-level default.
-						const tmpPageConcurrency = (typeof pOptions.DownloadPageConcurrency === 'number')
-							? pOptions.DownloadPageConcurrency
-							: ((typeof this.options.downloadPageConcurrency === 'number') ? this.options.downloadPageConcurrency : 4);
-						this.fable.Utility.eachLimit(tmpPages, tmpPageConcurrency,
-							(pPage, fDownloadCallback) =>
+							// Lazily load until we hit a not full page rather than using couns.
+							// Does not respect parallelization.
+							const pageSize = 250;
+							let page = 0;
+							let returnSet = [];
+							const recursiveCallback = (pDownloadError, pDownloadResponse, pDownloadBody) =>
 							{
-								this.restClient.getJSON(pPage.URL + (postfix || ''),
-									(pDownloadError, pDownloadResponse, pDownloadBody) =>
-									{
-										if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
-										{
-											this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] from url [${pPage.URL}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-											return fDownloadCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] from url [${pPage.URL}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
-										}
-										if (Array.isArray(pDownloadBody))
-										{
-											pPage.Records = pDownloadBody;
-										}
-										return fDownloadCallback(pDownloadError);
+								if ((pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400) || !Array.isArray(pDownloadBody))
+								{
+									this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
+									return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`), []);
+								}
+
+								returnSet = returnSet.concat(pDownloadBody);
+
+								if (pDownloadBody?.length < pageSize)
+								{
+									this.recordSetCache[tmpCacheKey].put(returnSet, pMeadowFilterExpression);
+
+									this.cacheIndividualEntityRecords(pEntity, returnSet, tmpScope);
+									fCallback(null, returnSet);
+								}
+								else
+								{
+									page += 1;
+									this._readEntityPage(pEntity, pMeadowFilterExpression, page * pageSize, pageSize, tmpReadOptions, recursiveCallback);
+								}
+							};
+							return this._readEntityPage(pEntity, pMeadowFilterExpression, page * pageSize, pageSize, tmpReadOptions, recursiveCallback);
+						}
+						return this.getEntitySetRecordCount(pEntity, pMeadowFilterExpression,
+							(pRecordCountError, pRecordCount) =>
+							{
+								if (pRecordCountError)
+								{
+									return fCallback(pRecordCountError);
+								}
+								let tmpRecordCount = pRecordCount;
+
+								if (isNaN(pRecordCount))
+								{
+									this.log.error(`Entity count did not return a number for [${pEntity}] filtered to [${pMeadowFilterExpression}]... something is fatally wrong from the server accessed in getEntitySet call.`);
+									return fCallback(new Error('Entity count did not return a number in getEntitySet.'));
+								}
+
+								let tmpDownloadBatchSize = this.options.downloadBatchSize;
+								const tmpPageCount = Math.ceil(tmpRecordCount / tmpDownloadBatchSize);
+
+								// Build an indexed array of page descriptors to preserve ordering
+								const tmpPages = [];
+								for (let i = 0; i < tmpPageCount; i++)
+								{
+									tmpPages.push({
+										Index: i,
+										Begin: i * tmpDownloadBatchSize,
+										Records: null
 									});
-							},
-							(pFullDownloadError) =>
-							{
-								// Reassemble pages in index order to maintain consistent ordering
-								let tmpEntitySet = [];
-								for (let i = 0; i < tmpPages.length; i++)
-								{
-									if (Array.isArray(tmpPages[i].Records))
+								}
+
+								// Fetch pages concurrently and reassemble in order.
+								// Per-call DownloadPageConcurrency overrides the provider-level default.
+								const tmpPageConcurrency = (typeof pOptions.DownloadPageConcurrency === 'number')
+									? pOptions.DownloadPageConcurrency
+									: ((typeof this.options.downloadPageConcurrency === 'number') ? this.options.downloadPageConcurrency : 4);
+								this.fable.Utility.eachLimit(tmpPages, tmpPageConcurrency,
+									(pPage, fDownloadCallback) =>
 									{
-										tmpEntitySet = tmpEntitySet.concat(tmpPages[i].Records);
-									}
-								}
+										this._readEntityPage(pEntity, pMeadowFilterExpression, pPage.Begin, tmpDownloadBatchSize, tmpReadOptions,
+											(pDownloadError, pDownloadResponse, pDownloadBody) =>
+											{
+												if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
+												{
+													this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
+													return fDownloadCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
+												}
+												if (Array.isArray(pDownloadBody))
+												{
+													pPage.Records = pDownloadBody;
+												}
+												return fDownloadCallback(pDownloadError);
+											});
+									},
+									(pFullDownloadError) =>
+									{
+										// Reassemble pages in index order to maintain consistent ordering
+										let tmpEntitySet = [];
+										for (let i = 0; i < tmpPages.length; i++)
+										{
+											if (Array.isArray(tmpPages[i].Records))
+											{
+												tmpEntitySet = tmpEntitySet.concat(tmpPages[i].Records);
+											}
+										}
 
-								if (tmpEntitySet)
-								{
-									this.recordSetCache[tmpCacheKey].put(tmpEntitySet, pMeadowFilterExpression);
-								}
+										if (tmpEntitySet)
+										{
+											this.recordSetCache[tmpCacheKey].put(tmpEntitySet, pMeadowFilterExpression);
+										}
 
-								this.cacheIndividualEntityRecords(pEntity, tmpEntitySet, tmpScope);
+										this.cacheIndividualEntityRecords(pEntity, tmpEntitySet, tmpScope);
 
-								return fCallback(pFullDownloadError, tmpEntitySet);
-							})
-					}, postfix, pOptions.URLPrefix);
-			}.bind(this));
+										return fCallback(pFullDownloadError, tmpEntitySet);
+									})
+							}, postfix, pOptions.URLPrefix);
+					}.bind(this));
+			});
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

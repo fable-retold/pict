@@ -33,6 +33,115 @@ declare class PictMeadowEntityProvider {
         Index: number;
         Step: Record<string, any>;
     }>> | null;
+    useQueryEndpoint: any;
+    /**
+     * Per-(urlPrefix, entity) capability cache. Different entities can resolve
+     * to different backend services (and thus different meadow-endpoints
+     * versions) behind the same urlPrefix, so support is cached per entity.
+     * @type {Record<string, { SupportsQuery: boolean, Metadata: (Record<string, any>|null) }>}
+     */
+    endpointCapabilityCache: Record<string, {
+        SupportsQuery: boolean;
+        Metadata: (Record<string, any> | null);
+    }>;
+    /**
+     * In-flight capability probes, keyed identically to the cache, so
+     * concurrent reads of the same entity collapse onto a single Schema probe.
+     * @type {Record<string, Array<(pError: Error|null, pSupportsQuery: boolean) => void>>}
+     */
+    endpointCapabilityInflight: Record<string, Array<(pError: Error | null, pSupportsQuery: boolean) => void>>;
+    /**
+     * Compute the capability cache key for an (entity, urlPrefix) pair.
+     *
+     * @param {string} pEntity - The entity name.
+     * @param {string} [pURLPrefix] - The URL prefix in play (defaults to the provider default).
+     * @return {string} The cache key.
+     */
+    _capabilityKey(pEntity: string, pURLPrefix?: string): string;
+    /**
+     * Major-version-aware check of whether a meadow-endpoints version string
+     * serves the POST /:Entity/Query route. Support is keyed off the major
+     * version (see QUERY_ENDPOINT_MIN_VERSION_BY_MAJOR) because the route was
+     * backported to 2.1.0 and added in 4.1.0, but absent on 3.x and 4.0.x.
+     *
+     * @param {string} pVersion - A semver string (e.g. '4.1.0').
+     * @return {boolean} True if the version is known to serve the Query route.
+     */
+    isMeadowEndpointsVersionQueryCapable(pVersion: string): boolean;
+    /**
+     * Decide, from a Schema endpoint response body, whether the serving
+     * meadow-endpoints supports the POST /:Entity/Query route. An explicit
+     * Capabilities flag wins when present; otherwise fall back to a
+     * major-version-aware check of the advertised meadow-endpoints version.
+     * Servers that advertise nothing (older deployments) are unsupported.
+     *
+     * @param {Record<string, any>} pSchemaBody - The Schema endpoint response body.
+     * @return {boolean} True if POST /:Entity/Query is supported.
+     */
+    evaluateQueryEndpointSupport(pSchemaBody: Record<string, any>): boolean;
+    /**
+     * Seed the capability cache for an entity from a Schema response the caller
+     * already has in hand (e.g. pict-section-recordset fetches the schema during
+     * initialization). Avoids a redundant capability probe.
+     *
+     * @param {string} pEntity - The entity name.
+     * @param {Record<string, any>} pSchemaBody - The Schema endpoint response body.
+     * @param {string} [pURLPrefix] - The URL prefix the schema was fetched from.
+     * @return {boolean} The resolved support value now cached.
+     */
+    primeEntityCapabilityFromSchema(pEntity: string, pSchemaBody: Record<string, any>, pURLPrefix?: string): boolean;
+    /**
+     * Resolve whether POST /:Entity/Query is usable for an entity, probing the
+     * Schema endpoint once and caching the result per (urlPrefix, entity).
+     * Concurrent calls for the same key collapse onto a single probe.
+     *
+     * Probe failures (network/parse) are NOT cached — they resolve to false (GET
+     * fallback) for this call but allow a later retry, so a transient blip does
+     * not permanently disable the faster transport for the session. A successful
+     * probe of an older server (no metadata) caches false and never re-probes.
+     *
+     * @param {string} pEntity - The entity name.
+     * @param {string} pURLPrefix - The URL prefix in play.
+     * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback.
+     * @return {void}
+     */
+    resolveEntityQuerySupport(pEntity: string, pURLPrefix: string, fCallback: (pError: Error | null, pSupportsQuery: boolean) => void): void;
+    /**
+     * Build the POST /:Entity/Query request body for a filtered read.
+     *
+     * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
+     * @param {number|null} [pBegin] - Pagination start cursor.
+     * @param {number|null} [pCap] - Pagination page size.
+     * @param {Record<string, any>} [pProjection] - Optional { Mode:'LiteExtended', ExtraColumns:[...] }.
+     * @return {Record<string, any>} The request body envelope.
+     */
+    _buildQueryReadBody(pMeadowFilterExpression: string, pBegin?: number | null, pCap?: number | null, pProjection?: Record<string, any>): Record<string, any>;
+    /**
+     * Read a page of an entity set, using POST /:Entity/Query when supported and
+     * falling back to the legacy GET read otherwise. The callback mirrors
+     * restClient.getJSON exactly: (pError, pResponse, pBody).
+     *
+     * @param {string} pEntity - The entity name.
+     * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
+     * @param {number|null} pBegin - Pagination start cursor (null for unpaged).
+     * @param {number|null} pCap - Pagination page size (null for unpaged).
+     * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix, Projection }.
+     * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
+     * @return {void}
+     */
+    _readEntityPage(pEntity: string, pMeadowFilterExpression: string, pBegin: number | null, pCap: number | null, pReadOptions: Record<string, any>, fCallback: (pError: Error | null, pResponse: any, pBody: any) => void): void;
+    /**
+     * Read the count of an entity set, using POST /:Entity/Query (Count mode)
+     * when supported and the legacy GET Count otherwise. The callback mirrors
+     * restClient.getJSON: (pError, pResponse, pBody) where pBody carries .Count.
+     *
+     * @param {string} pEntity - The entity name.
+     * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
+     * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix }.
+     * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
+     * @return {void}
+     */
+    _readEntityCount(pEntity: string, pMeadowFilterExpression: string, pReadOptions: Record<string, any>, fCallback: (pError: Error | null, pResponse: any, pBody: any) => void): void;
     /**
      * Compute the cache bucket key for an entity, optionally namespaced by a scope.
      * A non-empty scope yields an isolated bucket (`Entity::Scope`) so scoped/partial
@@ -211,14 +320,21 @@ declare class PictMeadowEntityProvider {
     cacheConnectedEntityRecordsWithoutCount(pRecordSet: any[], pIDListToCache: any[], pEntityListToCache: any[], pLiteRecords: boolean, fCallback: any, pScope?: string): void;
     /**
      * Fetch a set of entity records by primary-key ID list, chunking the meadow IN
-     * filter so the generated GET URL never exceeds HTTP/2 header-size limits on
-     * large sets (oversized URLs trip a connection-level reset that takes sibling
-     * multiplexed requests down with it). Records are cached as a side effect of
-     * getEntitySet; the callback returns no data.
+     * filter into requests.
+     *
+     * Chunk size is capability-aware: the legacy GET read embeds the IN-list in
+     * the URL, so it is chunked small (ConnectedEntityIDChunkSize, default 200) to
+     * keep the URL under HTTP/2 header-size limits — oversized URLs trip a
+     * connection-level reset that takes sibling multiplexed requests down with it.
+     * When the endpoint serves POST /:Entity/Query the IN-list rides in the body
+     * (no URI limit), so a much larger chunk is used (ConnectedEntityIDQueryChunkSize,
+     * default 5000) — bounding response size rather than URL length, and collapsing
+     * what used to be many small requests into one (or a few). Records are cached
+     * as a side effect of getEntitySet; the callback returns no data.
      *
      * @param {string} pEntityName - The entity name (e.g. 'Project').
      * @param {Array<number|string>} pIDRecordsArray - The primary-key IDs to fetch.
-     * @param {Object} pOptions - Options passed through to getEntitySet (Scope, NoCount, etc).
+     * @param {Object} pOptions - Options passed through to getEntitySet (Scope, NoCount, URLPrefix, etc).
      * @param {(error?: Error) => void} fCallback - Completion callback.
      *
      * @return {void}
@@ -252,7 +368,7 @@ declare class PictMeadowEntityProvider {
      * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default (e.g. a private-data-lake route).
      * @param {Record<string, any>} [pOptions] - Optional { Scope, Projection }: cache scope and Lite/LiteExtended projection.
      */
-    getEntitySetPage(pEntity: string, pMeadowFilterExpression: string, pRecordStartCursor: number, pRecordCount: number, fCallback: (pError?: Error, pEntitySet?: Array<Record<string, any>>) => void, postfix?: string, pURLPrefix?: string, pOptions?: Record<string, any>): any;
+    getEntitySetPage(pEntity: string, pMeadowFilterExpression: string, pRecordStartCursor: number, pRecordCount: number, fCallback: (pError?: Error, pEntitySet?: Array<Record<string, any>>) => void, postfix?: string, pURLPrefix?: string, pOptions?: Record<string, any>): void;
     /**
      * @param {string} pEntity - The name of the entity to get the count of.
      * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
@@ -260,7 +376,7 @@ declare class PictMeadowEntityProvider {
      * @param {string} [postfix] - Optional, adds a postfix string to the count url
      * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default.
      */
-    getEntitySetRecordCount(pEntity: string, pMeadowFilterExpression: string, fCallback: (pError?: Error, pRecordCount?: number) => void, postfix?: string, pURLPrefix?: string): any;
+    getEntitySetRecordCount(pEntity: string, pMeadowFilterExpression: string, fCallback: (pError?: Error, pRecordCount?: number) => void, postfix?: string, pURLPrefix?: string): void;
     /**
      * @param {string} pEntity - The name of the entity to get.
      * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.

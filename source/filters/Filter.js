@@ -39,7 +39,9 @@
  *   PreparedFilters: Array<PreparedFilter>,
  *   BundleConfig?: Array<Record<string, any>>,
  *   UserFilters?: Array<string>,
- * 	 Postfix?: string
+ * 	 Postfix?: string,
+ * 	 Scope?: string,
+ * 	 Projection?: Record<string, any>,
  * }} FilterState
  *
  * @typedef { 'None' |
