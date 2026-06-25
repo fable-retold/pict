@@ -2040,10 +2040,16 @@ class PictMeadowEntityProvider extends libFableServiceBase
 							let returnSet = [];
 							const recursiveCallback = (pDownloadError, pDownloadResponse, pDownloadBody) =>
 							{
-								if ((pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400) || !Array.isArray(pDownloadBody))
+								// A transport-level failure (e.g. connection reset, expired TLS
+								// cert) calls back with no response, so guard every pDownloadResponse
+								// deref and surface the underlying error rather than throwing a
+								// TypeError on the missing statusCode.
+								if (pDownloadError || (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400) || !Array.isArray(pDownloadBody))
 								{
-									this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-									return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`), []);
+									const tmpStatusCode = pDownloadResponse ? pDownloadResponse.statusCode : 'no response';
+									const tmpStatusDetail = pDownloadError ? (pDownloadError.message || pDownloadError) : (pDownloadResponse ? pDownloadResponse.statusMessage : '');
+									this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${tmpStatusCode} ${tmpStatusDetail}`);
+									return fCallback(pDownloadError || new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${tmpStatusCode} ${JSON.stringify(pDownloadBody || {})}`), []);
 								}
 
 								returnSet = returnSet.concat(pDownloadBody);

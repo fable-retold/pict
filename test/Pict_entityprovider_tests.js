@@ -1442,6 +1442,50 @@ suite(
 							});
 						}
 					);
+
+					test(
+						'NoCount read surfaces a transport error cleanly instead of throwing on a missing response',
+						function(fDone)
+						{
+							const tmpProvider = new libPict(_MockSettings).EntityProvider;
+							// Force the GET path (no probe) so the NoCount lazy loop runs.
+							tmpProvider.useQueryEndpoint = false;
+							// Mimic a socket-level failure (e.g. expired TLS cert): an error
+							// with NO response and NO body — exactly what tripped the old
+							// unguarded pDownloadResponse.statusCode deref.
+							Sinon.stub(tmpProvider.restClient, 'getJSON').callsFake(
+								(pOptionsOrURL, fCallback) =>
+								{
+									return fCallback(new Error('certificate has expired'), undefined, undefined);
+								});
+
+							let tmpCallbackCount = 0;
+							try
+							{
+								tmpProvider.getEntitySet('Book', 'FBV~Genre~EQ~SciFi',
+									(pError, pRecords) =>
+									{
+										tmpCallbackCount++;
+										try
+										{
+											Expect(pError).to.be.an('error');
+											Expect(pError.message).to.contain('certificate has expired');
+											Expect(pRecords).to.be.an('array');
+											Expect(tmpCallbackCount).to.equal(1);
+										}
+										catch (pAssertError)
+										{
+											return fDone(pAssertError);
+										}
+										return fDone();
+									}, '', { NoCount: true });
+							}
+							catch (pThrown)
+							{
+								return fDone(new Error(`getEntitySet threw synchronously instead of propagating the error: ${pThrown.message}`));
+							}
+						}
+					);
 				}
 			);
 	}
