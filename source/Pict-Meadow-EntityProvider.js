@@ -299,6 +299,33 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	}
 
 	/**
+	 * Decode a meadow filter expression for transport in a POST /:Entity/Query
+	 * body. Filter values are built URL-encoded for the legacy GET reads (e.g.
+	 * `%25...%25` for LIKE wildcards, encodeURIComponent'd distinct values),
+	 * relying on the server URL-decoding the `:Filter` path segment of the GET
+	 * route. The POST /Query route copies the body's Filter onto pRequest.params
+	 * verbatim with no decode, so the encoding must be undone here to deliver the
+	 * same value the GET path did. Malformed percent-sequences (a pre-existing
+	 * GET-path hazard) fall back to the raw string so the POST path never fails
+	 * where GET would not.
+	 *
+	 * @param {string} pMeadowFilterExpression - The (URL-encoded) meadow filter string.
+	 * @return {string} The decoded filter string.
+	 */
+	_decodeFilterForQueryBody(pMeadowFilterExpression)
+	{
+		try
+		{
+			return decodeURIComponent(pMeadowFilterExpression);
+		}
+		catch (pDecodeError)
+		{
+			this.log.warn(`EntityProvider could not URL-decode filter [${pMeadowFilterExpression}] for POST /Query body; sending raw: ${pDecodeError}`);
+			return pMeadowFilterExpression;
+		}
+	}
+
+	/**
 	 * Build the POST /:Entity/Query request body for a filtered read.
 	 *
 	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
@@ -313,7 +340,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		const tmpBody = {};
 		if (pMeadowFilterExpression)
 		{
-			tmpBody.Filter = pMeadowFilterExpression;
+			tmpBody.Filter = this._decodeFilterForQueryBody(pMeadowFilterExpression);
 		}
 		if (typeof pBegin === 'number')
 		{
