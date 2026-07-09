@@ -299,12 +299,32 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	}
 
 	/**
+	 * Normalize a step Projection into lite-read shaping. `Lite` and
+	 * `LiteExtended` both map to a lite read; `LiteExtended` with no
+	 * ExtraColumns degrades to a plain Lite read.
+	 *
+	 * @param {Record<string, any>} [pProjection] - Optional { Mode:'Lite'|'LiteExtended', ExtraColumns:[...] }.
+	 * @return {{ ExtraColumns: string|null }|null} Lite-read shaping, or null for a full read.
+	 */
+	_resolveLiteProjection(pProjection)
+	{
+		if (!pProjection || (pProjection.Mode !== 'Lite' && pProjection.Mode !== 'LiteExtended'))
+		{
+			return null;
+		}
+		const tmpExtraColumns = (Array.isArray(pProjection.ExtraColumns) && pProjection.ExtraColumns.length > 0)
+			? pProjection.ExtraColumns.join(',')
+			: null;
+		return { ExtraColumns: tmpExtraColumns };
+	}
+
+	/**
 	 * Build the POST /:Entity/Query request body for a filtered read.
 	 *
 	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
 	 * @param {number|null} [pBegin] - Pagination start cursor.
 	 * @param {number|null} [pCap] - Pagination page size.
-	 * @param {Record<string, any>} [pProjection] - Optional { Mode:'LiteExtended', ExtraColumns:[...] }.
+	 * @param {Record<string, any>} [pProjection] - Optional { Mode:'Lite'|'LiteExtended', ExtraColumns:[...] }.
 	 * @return {Record<string, any>} The request body envelope.
 	 */
 	_buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, pProjection)
@@ -323,11 +343,16 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		{
 			tmpBody.Cap = pCap;
 		}
-		if (pProjection && pProjection.Mode === 'LiteExtended' && Array.isArray(pProjection.ExtraColumns) && pProjection.ExtraColumns.length > 0)
+		const tmpLiteProjection = this._resolveLiteProjection(pProjection);
+		if (tmpLiteProjection)
 		{
-			// LiteExtended GET maps to a Lite read carrying ExtraColumns on Query.
+			// Lite/LiteExtended GET reads map to a Lite Query read; ExtraColumns
+			// carries the LiteExtended column list when present.
 			tmpBody.Lite = true;
-			tmpBody.ExtraColumns = pProjection.ExtraColumns.join(',');
+			if (tmpLiteProjection.ExtraColumns)
+			{
+				tmpBody.ExtraColumns = tmpLiteProjection.ExtraColumns;
+			}
 		}
 		return tmpBody;
 	}
@@ -362,8 +387,9 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		}
 
 		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpProjectionStanza = (tmpProjection && tmpProjection.Mode === 'LiteExtended' && Array.isArray(tmpProjection.ExtraColumns) && tmpProjection.ExtraColumns.length > 0)
-			? `/LiteExtended/${tmpProjection.ExtraColumns.join(',')}`
+		const tmpLiteProjection = this._resolveLiteProjection(tmpProjection);
+		const tmpProjectionStanza = tmpLiteProjection
+			? (tmpLiteProjection.ExtraColumns ? `/LiteExtended/${tmpLiteProjection.ExtraColumns}` : '/Lite')
 			: '';
 		const tmpPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
 		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;
@@ -2001,7 +2027,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
 	 * @param {(pError?: Error, pEntitySet?: Array) => void} fCallback - The callback to call when the request is complete.
 	 * @param {string} [postfix] - Optional, adds a postfix string to all calls made.
-	 * @param {Record<string, any>} [pOptions] - Optional, per-call options (e.g. { DownloadPageConcurrency: 1 }).
+	 * @param {Record<string, any>} [pOptions] - Optional, per-call options (e.g. { DownloadPageConcurrency: 1, Projection: { Mode: 'LiteExtended', ExtraColumns: [...] } }).
 	 *
 	 * @return {void}
 	 */
@@ -2009,6 +2035,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	{
 		const tmpURLPrefix = pOptions.URLPrefix || this.options.urlPrefix;
 		const tmpScope = (pOptions && pOptions.Scope) ? pOptions.Scope : '';
+		const tmpProjection = (pOptions && pOptions.Projection) ? pOptions.Projection : null;
 		this.initializeCache(pEntity, tmpScope);
 		const tmpCacheKey = this._cacheKey(pEntity, tmpScope);
 
@@ -2019,7 +2046,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.resolveEntityQuerySupport(pEntity, tmpURLPrefix,
 			(pSupportError, pSupportsQuery) =>
 			{
-				const tmpReadOptions = { SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '' };
+				const tmpReadOptions = { SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection };
 
 				// Discard anything from the cache that has expired or is over size.
 				this.recordSetCache[tmpCacheKey].prune(
@@ -2056,9 +2083,12 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 								if (pDownloadBody?.length < pageSize)
 								{
-									this.recordSetCache[tmpCacheKey].put(returnSet, pMeadowFilterExpression);
-
-									this.cacheIndividualEntityRecords(pEntity, returnSet, tmpScope);
+									// Do not cache projected (partial) records — see getEntitySetPage.
+									if (!tmpProjection)
+									{
+										this.recordSetCache[tmpCacheKey].put(returnSet, pMeadowFilterExpression);
+										this.cacheIndividualEntityRecords(pEntity, returnSet, tmpScope);
+									}
 									fCallback(null, returnSet);
 								}
 								else
@@ -2133,12 +2163,16 @@ class PictMeadowEntityProvider extends libFableServiceBase
 											}
 										}
 
-										if (tmpEntitySet)
+										// Do not cache projected (partial) records — see getEntitySetPage.
+										if (!tmpProjection)
 										{
-											this.recordSetCache[tmpCacheKey].put(tmpEntitySet, pMeadowFilterExpression);
-										}
+											if (tmpEntitySet)
+											{
+												this.recordSetCache[tmpCacheKey].put(tmpEntitySet, pMeadowFilterExpression);
+											}
 
-										this.cacheIndividualEntityRecords(pEntity, tmpEntitySet, tmpScope);
+											this.cacheIndividualEntityRecords(pEntity, tmpEntitySet, tmpScope);
+										}
 
 										return fCallback(pFullDownloadError, tmpEntitySet);
 									})

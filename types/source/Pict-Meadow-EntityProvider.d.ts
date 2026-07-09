@@ -107,12 +107,23 @@ declare class PictMeadowEntityProvider {
      */
     resolveEntityQuerySupport(pEntity: string, pURLPrefix: string, fCallback: (pError: Error | null, pSupportsQuery: boolean) => void): void;
     /**
+     * Normalize a step Projection into lite-read shaping. `Lite` and
+     * `LiteExtended` both map to a lite read; `LiteExtended` with no
+     * ExtraColumns degrades to a plain Lite read.
+     *
+     * @param {Record<string, any>} [pProjection] - Optional { Mode:'Lite'|'LiteExtended', ExtraColumns:[...] }.
+     * @return {{ ExtraColumns: string|null }|null} Lite-read shaping, or null for a full read.
+     */
+    _resolveLiteProjection(pProjection?: Record<string, any>): {
+        ExtraColumns: string | null;
+    } | null;
+    /**
      * Build the POST /:Entity/Query request body for a filtered read.
      *
      * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
      * @param {number|null} [pBegin] - Pagination start cursor.
      * @param {number|null} [pCap] - Pagination page size.
-     * @param {Record<string, any>} [pProjection] - Optional { Mode:'LiteExtended', ExtraColumns:[...] }.
+     * @param {Record<string, any>} [pProjection] - Optional { Mode:'Lite'|'LiteExtended', ExtraColumns:[...] }.
      * @return {Record<string, any>} The request body envelope.
      */
     _buildQueryReadBody(pMeadowFilterExpression: string, pBegin?: number | null, pCap?: number | null, pProjection?: Record<string, any>): Record<string, any>;
@@ -388,7 +399,7 @@ declare class PictMeadowEntityProvider {
      * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
      * @param {(pError?: Error, pEntitySet?: Array) => void} fCallback - The callback to call when the request is complete.
      * @param {string} [postfix] - Optional, adds a postfix string to all calls made.
-     * @param {Record<string, any>} [pOptions] - Optional, per-call options (e.g. { DownloadPageConcurrency: 1 }).
+     * @param {Record<string, any>} [pOptions] - Optional, per-call options (e.g. { DownloadPageConcurrency: 1, Projection: { Mode: 'LiteExtended', ExtraColumns: [...] } }).
      *
      * @return {void}
      */

@@ -1488,5 +1488,273 @@ suite(
 					);
 				}
 			);
+
+			suite(
+				'AllRecords Projection Passthrough',
+				function()
+				{
+					const _SchemaQueryCapable = { title: 'Book', RetoldMetadata: { PackageVersions: { 'meadow-endpoints': '4.1.0' }, Capabilities: { QueryEndpoint: true } } };
+					const _SchemaLegacy = { title: 'Book', properties: { IDBook: {} } };
+					const _TestProjection = { Mode: 'LiteExtended', ExtraColumns: [ 'Title', 'IDAuthor' ] };
+
+					const installRestStubs = (pProvider, pSchemaBody) =>
+					{
+						const tmpGetStub = Sinon.stub(pProvider.restClient, 'getJSON').callsFake(
+							(pOptionsOrURL, fCallback) =>
+							{
+								const tmpURL = (typeof pOptionsOrURL === 'string') ? pOptionsOrURL : pOptionsOrURL.url;
+								if (tmpURL.endsWith('/Schema'))
+								{
+									return fCallback(null, { statusCode: 200 }, pSchemaBody);
+								}
+								if (tmpURL.indexOf('/Count') !== -1)
+								{
+									return fCallback(null, { statusCode: 200 }, { Count: 3 });
+								}
+								return fCallback(null, { statusCode: 200 }, [ { IDBook: 1, Title: 'A' }, { IDBook: 2, Title: 'B' }, { IDBook: 3, Title: 'C' } ]);
+							});
+						const tmpPostStub = Sinon.stub(pProvider.restClient, 'postJSON').callsFake(
+							(pOptions, fCallback) =>
+							{
+								if (pOptions.body && pOptions.body.Count)
+								{
+									return fCallback(null, { statusCode: 200 }, { Count: 3 });
+								}
+								return fCallback(null, { statusCode: 200 }, [ { IDBook: 1, Title: 'A' }, { IDBook: 2, Title: 'B' }, { IDBook: 3, Title: 'C' } ]);
+							});
+						return { getStub: tmpGetStub, postStub: tmpPostStub };
+					};
+
+					test(
+						'legacy server: an AllRecords step with a Projection produces /LiteExtended/ page URLs',
+						function(fDone)
+						{
+							const testPict = new libPict(_MockSettings);
+							const tmpStubs = installRestStubs(testPict.EntityProvider, _SchemaLegacy);
+
+							testPict.EntityProvider.gatherDataFromServer(
+								[
+									{
+										"Entity": "Book",
+										"Filter": "FBV~Genre~EQ~SciFi",
+										"AllRecords": true,
+										"Destination": "AppData.Books",
+										"Projection": _TestProjection
+									}
+								],
+								(pError) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(testPict.AppData.Books.length).to.equal(3);
+										const tmpURLs = tmpStubs.getStub.getCalls().map((pCall) => { return (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; });
+										// The Count probe stays unprojected...
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/Count/FilteredTo/FBV~Genre~EQ~SciFi') !== -1; })).to.equal(true);
+										// ...but every page read carries the LiteExtended stanza.
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/LiteExtended/Title,IDAuthor/FilteredTo/FBV~Genre~EQ~SciFi/') !== -1; })).to.equal(true);
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/FilteredTo/') !== -1; })).to.equal(false);
+										// Projected (partial) records must not enter the record set cache.
+										Expect(testPict.EntityProvider.recordSetCache['Book'].read('FBV~Genre~EQ~SciFi')).to.not.be.an('array');
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'query-capable server: an AllRecords step with a Projection sends ExtraColumns in the Query body',
+						function(fDone)
+						{
+							const testPict = new libPict(_MockSettings);
+							const tmpStubs = installRestStubs(testPict.EntityProvider, _SchemaQueryCapable);
+
+							testPict.EntityProvider.gatherDataFromServer(
+								[
+									{
+										"Entity": "Book",
+										"Filter": "FBV~Genre~EQ~SciFi",
+										"AllRecords": true,
+										"Destination": "AppData.Books",
+										"Projection": _TestProjection
+									}
+								],
+								(pError) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(testPict.AppData.Books.length).to.equal(3);
+										const tmpPageReads = tmpStubs.postStub.getCalls().filter((pCall) => { return !(pCall.args[0].body && pCall.args[0].body.Count); });
+										Expect(tmpPageReads.length).to.be.at.least(1);
+										tmpPageReads.forEach((pCall) =>
+										{
+											Expect(pCall.args[0].url).to.equal('http://localhost:8086/1.0/Books/Query');
+											Expect(pCall.args[0].body.Filter).to.equal('FBV~Genre~EQ~SciFi');
+											Expect(pCall.args[0].body.ExtraColumns).to.equal('Title,IDAuthor');
+										});
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'legacy server: a Lite Projection produces /Lite/ page URLs and skips the caches',
+						function(fDone)
+						{
+							const testPict = new libPict(_MockSettings);
+							const tmpStubs = installRestStubs(testPict.EntityProvider, _SchemaLegacy);
+
+							testPict.EntityProvider.gatherDataFromServer(
+								[
+									{
+										"Entity": "Book",
+										"Filter": "FBV~Genre~EQ~SciFi",
+										"AllRecords": true,
+										"Destination": "AppData.Books",
+										"Projection": { Mode: 'Lite' }
+									}
+								],
+								(pError) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(testPict.AppData.Books.length).to.equal(3);
+										const tmpURLs = tmpStubs.getStub.getCalls().map((pCall) => { return (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; });
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/Lite/FilteredTo/FBV~Genre~EQ~SciFi/') !== -1; })).to.equal(true);
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/LiteExtended/') !== -1; })).to.equal(false);
+										Expect(testPict.EntityProvider.recordSetCache['Book'].read('FBV~Genre~EQ~SciFi')).to.not.be.an('array');
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'query-capable server: a Lite Projection sends Lite:true with no ExtraColumns in the Query body',
+						function(fDone)
+						{
+							const testPict = new libPict(_MockSettings);
+							const tmpStubs = installRestStubs(testPict.EntityProvider, _SchemaQueryCapable);
+
+							testPict.EntityProvider.gatherDataFromServer(
+								[
+									{
+										"Entity": "Book",
+										"Filter": "FBV~Genre~EQ~SciFi",
+										"AllRecords": true,
+										"Destination": "AppData.Books",
+										"Projection": { Mode: 'Lite' }
+									}
+								],
+								(pError) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(testPict.AppData.Books.length).to.equal(3);
+										const tmpPageReads = tmpStubs.postStub.getCalls().filter((pCall) => { return !(pCall.args[0].body && pCall.args[0].body.Count); });
+										Expect(tmpPageReads.length).to.be.at.least(1);
+										tmpPageReads.forEach((pCall) =>
+										{
+											Expect(pCall.args[0].body.Lite).to.equal(true);
+											Expect(pCall.args[0].body).to.not.have.property('ExtraColumns');
+										});
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'a LiteExtended Projection with no ExtraColumns degrades to a plain Lite read',
+						function(fDone)
+						{
+							const testPict = new libPict(_MockSettings);
+							const tmpStubs = installRestStubs(testPict.EntityProvider, _SchemaLegacy);
+
+							testPict.EntityProvider.gatherDataFromServer(
+								[
+									{
+										"Entity": "Book",
+										"Filter": "FBV~Genre~EQ~SciFi",
+										"AllRecords": true,
+										"Destination": "AppData.Books",
+										"Projection": { Mode: 'LiteExtended', ExtraColumns: [] }
+									}
+								],
+								(pError) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(testPict.AppData.Books.length).to.equal(3);
+										const tmpURLs = tmpStubs.getStub.getCalls().map((pCall) => { return (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; });
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/Books/Lite/FilteredTo/FBV~Genre~EQ~SciFi/') !== -1; })).to.equal(true);
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/LiteExtended/') !== -1; })).to.equal(false);
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+
+					test(
+						'an AllRecords step without a Projection still caches and reads full rows',
+						function(fDone)
+						{
+							const testPict = new libPict(_MockSettings);
+							const tmpStubs = installRestStubs(testPict.EntityProvider, _SchemaLegacy);
+
+							testPict.EntityProvider.gatherDataFromServer(
+								[
+									{
+										"Entity": "Book",
+										"Filter": "FBV~Genre~EQ~SciFi",
+										"AllRecords": true,
+										"Destination": "AppData.Books"
+									}
+								],
+								(pError) =>
+								{
+									try
+									{
+										Expect(pError).to.not.exist;
+										Expect(testPict.AppData.Books.length).to.equal(3);
+										const tmpURLs = tmpStubs.getStub.getCalls().map((pCall) => { return (typeof pCall.args[0] === 'string') ? pCall.args[0] : pCall.args[0].url; });
+										Expect(tmpURLs.some((pU) => { return pU.indexOf('/LiteExtended/') !== -1; })).to.equal(false);
+										Expect(testPict.EntityProvider.recordSetCache['Book'].read('FBV~Genre~EQ~SciFi')).to.be.an('array');
+									}
+									catch (pAssertError)
+									{
+										return fDone(pAssertError);
+									}
+									return fDone();
+								});
+						}
+					);
+				}
+			);
 	}
 );
