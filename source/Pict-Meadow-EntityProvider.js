@@ -376,6 +376,21 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		const tmpPostfix = (pReadOptions && pReadOptions.Postfix) || '';
 		const tmpProjection = pReadOptions ? pReadOptions.Projection : null;
 
+		if (tmpProjection && tmpProjection.Mode === 'Distinct' && Array.isArray(tmpProjection.Columns) && tmpProjection.Columns.length > 0)
+		{
+			if (pReadOptions && pReadOptions.SupportsQuery)
+			{
+				const tmpDistinctBody = this._buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, null);
+				tmpDistinctBody.Distinct = true;
+				tmpDistinctBody.Columns = tmpProjection.Columns.join(',');
+				return this.restClient.postJSON({ url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`, body: tmpDistinctBody }, fCallback);
+			}
+			const tmpDistinctFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
+			const tmpDistinctPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
+			const tmpDistinctURL = `${tmpURLPrefix}${pEntity}s/Distinct/${tmpProjection.Columns.join(',')}${tmpDistinctFilterStanza}${tmpDistinctPageStanza}${tmpPostfix}`;
+			return this.restClient.getJSON(tmpDistinctURL, fCallback);
+		}
+
 		if (pReadOptions && pReadOptions.SupportsQuery)
 		{
 			const tmpRequestOptions = (
@@ -567,11 +582,24 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		// Parse the filter template
 		const tmpFilterString = this.fable.parseTemplate(pEntityInformation.Filter, pContext);
 
+		const tmpFilterLengthThreshold = (typeof this.options.largeFilterStringWarningThreshold === 'number') ? this.options.largeFilterStringWarningThreshold : 100000;
+		if (tmpFilterString.length > tmpFilterLengthThreshold)
+		{
+			this.log.warn(`EntityBundleRequest filter for [${pEntityInformation.Entity}] expanded to ${tmpFilterString.length} characters from a ${pEntityInformation.Filter.length} character template.`);
+		}
+
 		// Create a callback function to handle receiving the record set
 		const fRecordFetchComplete = (pError, pRecordSet) =>
 		{
 			if (pError)
 			{
+				if (pEntityInformation.Projection && pEntityInformation.Projection.Mode === 'Distinct')
+				{
+					this.log.warn(`EntityBundleRequest distinct read for [${pEntityInformation.Entity}] failed (${pError}); falling back to a full record read.`);
+					const tmpFallbackInformation = Object.assign({}, pEntityInformation);
+					delete tmpFallbackInformation.Projection;
+					return this.gatherEntitySet(tmpFallbackInformation, pContext, fCallback);
+				}
 				this.log.error(`EntityBundleRequest request Error getting entity set for [${pEntityInformation.Entity}] with filter [${tmpFilterString}]: ${pError}`, pError);
 				return fCallback(pError);
 			}
@@ -1428,6 +1456,8 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		// The maximum number of concurrent requests per wave
 		const tmpMaxConcurrency = (typeof this.options.maxBundleConcurrency === 'number') ? this.options.maxBundleConcurrency : 8;
 
+		const tmpSlowStepThreshold = (typeof this.options.slowBundleStepWarningThreshold === 'number') ? this.options.slowBundleStepWarningThreshold : 2000;
+
 		// Execute waves sequentially; steps within each wave run concurrently
 		let tmpWaveIndex = 0;
 
@@ -1450,6 +1480,16 @@ class PictMeadowEntityProvider extends libFableServiceBase
 				tmpWaveAnticipate.anticipate(
 					(fNext) =>
 					{
+						const tmpStepStartTime = Date.now();
+						const fStepComplete = (pStepError) =>
+						{
+							const tmpStepElapsed = Date.now() - tmpStepStartTime;
+							if (tmpStepElapsed > tmpSlowStepThreshold)
+							{
+								this.log.warn(`EntityBundleRequest step [${tmpEntityBundleEntry.Type || 'MeadowEntity'}]${tmpEntityBundleEntry.Entity ? ` for [${tmpEntityBundleEntry.Entity}]` : ''} took ${tmpStepElapsed}ms (destination [${tmpEntityBundleEntry.Destination || tmpEntityBundleEntry.StateAddress || ''}]).`);
+							}
+							return fNext(pStepError);
+						};
 						try
 						{
 							switch (tmpEntityBundleEntry.Type)
@@ -1462,7 +1502,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 										tmpState = {};
 										this.fable.manifest.setValueByHash(this.fable, tmpEntityBundleEntry.StateAddress, tmpState);
 									}
-									return fNext();
+									return fStepComplete();
 								case 'PopState':
 									if (tmpStateStack.length > 0)
 									{
@@ -1472,27 +1512,27 @@ class PictMeadowEntityProvider extends libFableServiceBase
 									{
 										this.log.warn(`EntityBundleRequest encountered a PopState without a matching SetStateAddress.`);
 									}
-									return fNext();
+									return fStepComplete();
 								case 'Custom':
-									return this.gatherCustomDataSet(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry), fNext);
+									return this.gatherCustomDataSet(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry), fStepComplete);
 								case 'MapJoin':
 									this.mapJoin(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry));
-									return fNext();
+									return fStepComplete();
 								case 'ProjectDataset':
 									this.projectDataset(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry));
-									return fNext();
+									return fStepComplete();
 								// This is the default case, for a meadow entity set or single entity
 								case 'MeadowEntityCount':
-									return this.gatherEntitySetCount(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry), fNext);
+									return this.gatherEntitySetCount(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry), fStepComplete);
 								case 'MeadowEntity':
 								default:
-									return this.gatherEntitySet(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry), fNext);
+									return this.gatherEntitySet(tmpEntityBundleEntry, this.prepareState(tmpState, tmpEntityBundleEntry), fStepComplete);
 							}
 						}
 						catch (pError)
 						{
 							this.log.error(`EntityBundleRequest error gathering entity set: ${pError}`, { Stack: pError.stack });
-							return fNext();
+							return fStepComplete();
 						}
 					});
 			}
@@ -2115,7 +2155,23 @@ class PictMeadowEntityProvider extends libFableServiceBase
 								}
 
 								let tmpDownloadBatchSize = this.options.downloadBatchSize;
+								if (tmpProjection && tmpProjection.Mode === 'Distinct')
+								{
+									// A distinct read returns at most one narrow row per distinct value;
+									// fetch it as a single page (the row count bounds the distinct count)
+									// rather than paging, which is unstable without a server-side sort.
+									tmpDownloadBatchSize = Math.max(tmpRecordCount, 1);
+								}
 								const tmpPageCount = Math.ceil(tmpRecordCount / tmpDownloadBatchSize);
+
+								const tmpLargeSetThreshold = (typeof this.options.largeRecordSetWarningThreshold === 'number') ? this.options.largeRecordSetWarningThreshold : 25000;
+								if (tmpRecordCount > tmpLargeSetThreshold)
+								{
+									const tmpGatherShape = (tmpProjection && tmpProjection.Mode === 'Distinct')
+										? `distinct [${tmpProjection.Columns.join(',')}] values from ${tmpRecordCount} [${pEntity}] rows`
+										: `ALL ${tmpRecordCount} [${pEntity}] records (${tmpPageCount} pages of ${tmpDownloadBatchSize})`;
+									this.log.warn(`EntityBundleRequest gathering ${tmpGatherShape} for filter [${pMeadowFilterExpression.length > 300 ? `${pMeadowFilterExpression.substring(0, 300)}…` : pMeadowFilterExpression}] into memory.`);
+								}
 
 								// Build an indexed array of page descriptors to preserve ordering
 								const tmpPages = [];

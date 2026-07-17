@@ -606,6 +606,24 @@ class FilterMeadowStanzaTokenGenerator
 					tmpRemoteResolutionFilter.URLPrefix = tmpFilterConfig.URLPrefix;
 				}
 			}
+			// Non-core join-resolution steps are consumed only by a PJU pluck of a
+			// single connection column; record it so the compiled step can project
+			// the read to that column instead of materializing full records.
+			for (const tmpRemoteResolutionFilter of tmpFilterResult.Filters)
+			{
+				if (tmpRemoteResolutionFilter.CoreEntity)
+				{
+					continue;
+				}
+				if (tmpRemoteResolutionFilter.Index === -1)
+				{
+					tmpRemoteResolutionFilter.PluckColumn = tmpFilterConfig.ExternalFilterByTableConnectionColumn || tmpFilterConfig.JoinTableExternalConnectionColumn;
+				}
+				else if (tmpRemoteResolutionFilter.Index === 0)
+				{
+					tmpRemoteResolutionFilter.PluckColumn = tmpFilterConfig.JoinTable ? tmpFilterConfig.JoinTableCoreConnectionColumn : tmpFilterConfig.JoinExternalConnectionColumn;
+				}
+			}
 			if (tmpFilterResult.Filters.length > 0)
 			{
 				if (tmpFilterConfig.GUIDGroup)
@@ -826,7 +844,7 @@ class FilterMeadowStanzaTokenGenerator
 					}
 					if (!tmpGroupedFilters[tmpFilterGroupGUID])
 					{
-						tmpGroupedFilters[tmpFilterGroupGUID] = { Stanzas: [], ComputedIndex: tmpFilter.ComputedIndex, Entity: tmpFilter.Entity, URLPrefix: tmpFilter.URLPrefix };
+						tmpGroupedFilters[tmpFilterGroupGUID] = { Stanzas: [], ComputedIndex: tmpFilter.ComputedIndex, Entity: tmpFilter.Entity, URLPrefix: tmpFilter.URLPrefix, PluckColumn: tmpFilter.PluckColumn };
 					}
 					tmpGroupedFilters[tmpFilterGroupGUID].Stanzas.push(this._compileSimpleFilterToString(tmpFilter));
 				}
@@ -836,7 +854,7 @@ class FilterMeadowStanzaTokenGenerator
 				tmpGroupedFilters[tmpFilterGroupKey].Stanzas = tmpGroupedFilters[tmpFilterGroupKey].Stanzas.filter((f) => f.length > 0);
 				if (tmpGroupedFilters[tmpFilterGroupKey].Stanzas.length > 0)
 				{
-					tmpBundleConfig.push(
+					const tmpResolutionStep =
 						{
 							Type: 'MeadowEntity',
 							AllRecords: true,
@@ -844,7 +862,12 @@ class FilterMeadowStanzaTokenGenerator
 							URLPrefix: tmpGroupedFilters[tmpFilterGroupKey].URLPrefix,
 							Filter: tmpGroupedFilters[tmpFilterGroupKey].Stanzas.join('~'),
 							Destination: `State[Step${tmpGroupedFilters[tmpFilterGroupKey].ComputedIndex}]`,
-						});
+						};
+					if (tmpGroupedFilters[tmpFilterGroupKey].PluckColumn)
+					{
+						tmpResolutionStep.Projection = { Mode: 'Distinct', Columns: [ tmpGroupedFilters[tmpFilterGroupKey].PluckColumn ] };
+					}
+					tmpBundleConfig.push(tmpResolutionStep);
 				}
 			}
 		}

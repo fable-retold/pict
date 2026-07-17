@@ -515,7 +515,11 @@ suite(
 					function(fDone)
 					{
 						const testPict = new libPict(_MockSettings);
+						// The transport is capability-dependent (GET reads vs POST /:Entity/Query),
+						// so count requests across both verbs.
 						const getJSONSpy = Sinon.spy(testPict.EntityProvider.restClient, 'getJSON');
+						const postJSONSpy = Sinon.spy(testPict.EntityProvider.restClient, 'postJSON');
+						const fRequestCount = () => getJSONSpy.callCount + postJSONSpy.callCount;
 
 						// The test database does not have a users table yet.
 						delete testPict.EntityProvider.entityColumnTranslations.CreatingIDUser;
@@ -523,7 +527,6 @@ suite(
 						delete testPict.EntityProvider.entityColumnTranslations.DeletingIDUser;
 
 						let tmpAnticipate = testPict.newAnticipate();
-						let tmpTestState = {};
 
 						// First, get 10 books which should automatically prime both the list cache and single record caches.
 						tmpAnticipate.anticipate(
@@ -531,7 +534,7 @@ suite(
 							{
 								testPict.EntityProvider.getEntitySetWithAutoCaching('BookAuthorJoin', `FBV~IDAuthor~GT~40~FBV~IDAuthor~LT~75`, fStageComplete);
 							});
-						
+
 						// Now, get a single author within the ID range that should be in the cache already.
 						let tmpCallCountAfterBatch;
 						tmpAnticipate.anticipate(
@@ -539,7 +542,7 @@ suite(
 							{
 								// The exact call count depends on seed data volume (pagination),
 								// so capture the count after batch and assert relative to it.
-								tmpCallCountAfterBatch = getJSONSpy.callCount;
+								tmpCallCountAfterBatch = fRequestCount();
 								Expect(tmpCallCountAfterBatch).to.be.at.least(10);
 								testPict.EntityProvider.getEntity('Author', 42,
 									(pError, pRecord) =>
@@ -547,7 +550,7 @@ suite(
 										Expect(pRecord).to.be.an('object');
 										Expect(pRecord.IDAuthor).to.equal(42);
 										// Cache hit -- no new network requests
-										Sinon.assert.callCount(getJSONSpy, tmpCallCountAfterBatch);
+										Expect(fRequestCount()).to.equal(tmpCallCountAfterBatch);
 										return fStageComplete(pError);
 									});
 							});
@@ -557,14 +560,14 @@ suite(
 						tmpAnticipate.anticipate(
 							(fStageComplete) =>
 							{
-								Sinon.assert.callCount(getJSONSpy, tmpCallCountAfterBatch);
+								Expect(fRequestCount()).to.equal(tmpCallCountAfterBatch);
 								testPict.EntityProvider.getEntity('Author', 188,
 									(pError, pRecord) =>
 									{
 										Expect(pRecord).to.be.an('object');
 										Expect(pRecord.IDAuthor).to.equal(188);
 										// Expect exactly one new network request (cache miss)
-										Sinon.assert.callCount(getJSONSpy, tmpCallCountAfterBatch + 1);
+										Expect(fRequestCount()).to.equal(tmpCallCountAfterBatch + 1);
 										return fStageComplete(pError);
 									});
 							});
