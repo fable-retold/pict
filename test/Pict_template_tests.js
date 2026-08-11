@@ -1013,5 +1013,73 @@ suite(
 							);
 					}
 				);
+			suite(
+					'Stack Overflow Resistance',
+					function ()
+					{
+						test(
+								'TemplateSet should handle a very large data set without stack overflow',
+								function (fDone)
+								{
+									this.timeout(30000);
+									const testPict = new libPict(_MockSettings);
+									// Generate a large array of objects to stress test the template set iteration
+									let tmpLargeDataSet = [];
+									for (let i = 0; i < 100000; i++)
+									{
+										tmpLargeDataSet.push({ index: i, name: `Item_${i}`, value: i * 10 });
+									}
+									let tmpTemplateOutput = testPict.parseTemplateSet('<span>{~Data:Record.index~}</span>', tmpLargeDataSet);
+									// Verify the output starts and ends correctly
+									Expect(tmpTemplateOutput).to.contain('<span>0</span>');
+									Expect(tmpTemplateOutput).to.contain('<span>99999</span>');
+									fDone();
+								}
+							);
+						test(
+								'TemplateSet async should handle a very large data set without stack overflow',
+								function (fDone)
+								{
+									this.timeout(60000);
+									const testPict = new libPict(_MockSettings);
+									// Generate a large array of objects to stress test the async template set iteration
+									let tmpLargeDataSet = [];
+									for (let i = 0; i < 100000; i++)
+									{
+										tmpLargeDataSet.push({ index: i, name: `Item_${i}`, value: i * 10 });
+									}
+									testPict.parseTemplateSet('<span>{~Data:Record.index~}</span>', tmpLargeDataSet,
+										(pError, pValue) =>
+										{
+											Expect(pError).to.not.exist;
+											Expect(pValue).to.contain('<span>0</span>');
+											Expect(pValue).to.contain('<span>99999</span>');
+											fDone();
+										});
+								}
+							);
+						test(
+								'TemplateSetWithPayload async should handle a very large data set without stack overflow',
+								function (fDone)
+								{
+									this.timeout(60000);
+									const testPict = new libPict(_MockSettings);
+									let tmpLargeDataSet = [];
+									for (let i = 0; i < 100000; i++)
+									{
+										tmpLargeDataSet.push({ index: i, name: `Item_${i}`, value: i * 10 });
+									}
+									testPict.parseTemplateSetWithPayload('<span>{~Data:Record.Data.index~} {~Data:Record.Payload.label~}</span>', tmpLargeDataSet, { label: 'test' },
+										(pError, pValue) =>
+										{
+											Expect(pError).to.not.exist;
+											Expect(pValue).to.contain('<span>0 test</span>');
+											Expect(pValue).to.contain('<span>99999 test</span>');
+											fDone();
+										});
+								}
+							);
+					}
+				);
 		}
 	);
