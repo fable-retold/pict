@@ -34,6 +34,19 @@ declare class PictMeadowEntityProvider {
         Step: Record<string, any>;
     }>> | null;
     useQueryEndpoint: any;
+    readRetryConfiguration: any;
+    /**
+     * Optional outcome classifier passed through to the RestClient on every
+     * read. Needed where an API reports failure in the body rather than the
+     * status code; see FableServiceRestClient.retryClassifier.
+     *
+     * Set it as a provider option or assign it directly
+     * (`pict.EntityProvider.readRetryClassifier = fn`). It deliberately has no
+     * settings key -- fable's settings merge drops function values, so a
+     * classifier can only ever arrive programmatically.
+     * @type {Function|null}
+     */
+    readRetryClassifier: Function | null;
     /**
      * Per-(urlPrefix, entity) capability cache. Different entities can resolve
      * to different backend services (and thus different meadow-endpoints
@@ -106,6 +119,35 @@ declare class PictMeadowEntityProvider {
      * @return {void}
      */
     resolveEntityQuerySupport(pEntity: string, pURLPrefix: string, fCallback: (pError: Error | null, pSupportsQuery: boolean) => void): void;
+    /**
+     * Render a filter expression for inclusion in an error or log message. A
+     * chunked ID read carries thousands of IDs in its filter; embedding it whole
+     * produces multi-kilobyte Error messages that propagate into alerting.
+     *
+     * @param {string} pMeadowFilterExpression - The filter expression.
+     * @return {string} The filter, elided past the message length budget.
+     */
+    _describeFilter(pMeadowFilterExpression: string): string;
+    /**
+     * Stamp read-resilience metadata onto an outbound read request. Every read
+     * this provider issues is non-mutating -- including the POST /:Entity/Query
+     * reads, which are POSTs only so the filter can travel in the body -- so they
+     * are all explicitly marked safe for the RestClient to replay.
+     *
+     * @param {Record<string, any>} pRequestOptions - The request options object.
+     * @return {Record<string, any>} The same object, decorated.
+     */
+    _decorateReadRequestOptions(pRequestOptions: Record<string, any>): Record<string, any>;
+    /**
+     * Decorate a GET read expressed as a bare URL. GET is already replayable under
+     * the RestClient's stock policy, so the URL is passed through untouched unless
+     * this provider carries its own retry configuration to apply -- which keeps the
+     * call shape (and every consumer spying on it) exactly as it was.
+     *
+     * @param {string} pURL - The read URL.
+     * @return {string|Record<string, any>} The URL, or an options object carrying the retry override.
+     */
+    _decorateReadURL(pURL: string): string | Record<string, any>;
     /**
      * Normalize a step Projection into lite-read shaping. `Lite` and
      * `LiteExtended` both map to a lite read; `LiteExtended` with no

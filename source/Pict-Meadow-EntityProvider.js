@@ -103,6 +103,42 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		}
 
 		/**
+		 * Retry configuration handed to the RestClient on every read this provider
+		 * issues. `null` (the default) inherits whatever policy the RestClient was
+		 * built with -- and the RestClient default is no retry at all, so reads
+		 * behave exactly as they always have until an application opts in here or
+		 * at the fable layer. Accepts anything the RestClient policy builder
+		 * accepts: an overrides object, a number (max attempts), true to enable
+		 * with the recommended budget, or false to disable.
+		 * @type {Record<string, any>|number|boolean|null}
+		 */
+		if (typeof this.options.ReadRetry !== 'undefined')
+		{
+			this.readRetryConfiguration = this.options.ReadRetry;
+		}
+		else if (typeof this.fable.settings.PictMeadowReadRetry !== 'undefined')
+		{
+			this.readRetryConfiguration = this.fable.settings.PictMeadowReadRetry;
+		}
+		else
+		{
+			this.readRetryConfiguration = null;
+		}
+
+		/**
+		 * Optional outcome classifier passed through to the RestClient on every
+		 * read. Needed where an API reports failure in the body rather than the
+		 * status code; see FableServiceRestClient.retryClassifier.
+		 *
+		 * Set it as a provider option or assign it directly
+		 * (`pict.EntityProvider.readRetryClassifier = fn`). It deliberately has no
+		 * settings key -- fable's settings merge drops function values, so a
+		 * classifier can only ever arrive programmatically.
+		 * @type {Function|null}
+		 */
+		this.readRetryClassifier = (typeof this.options.ReadRetryClassifier === 'function') ? this.options.ReadRetryClassifier : null;
+
+		/**
 		 * Per-(urlPrefix, entity) capability cache. Different entities can resolve
 		 * to different backend services (and thus different meadow-endpoints
 		 * versions) behind the same urlPrefix, so support is cached per entity.
@@ -262,7 +298,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 		/** @type {Record<string, any>} */
 		let tmpOptions = ({ url: `${pURLPrefix || this.options.urlPrefix}${pEntity}/Schema` });
-		tmpOptions = this.prepareRequestOptions(tmpOptions);
+		tmpOptions = this._decorateReadRequestOptions(this.prepareRequestOptions(tmpOptions));
 
 		this.restClient.getJSON(tmpOptions,
 			(pError, pResponse, pBody) =>
@@ -296,6 +332,65 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					tmpCallbacks[i](null, tmpSupportsQuery);
 				}
 			});
+	}
+
+	/**
+	 * Render a filter expression for inclusion in an error or log message. A
+	 * chunked ID read carries thousands of IDs in its filter; embedding it whole
+	 * produces multi-kilobyte Error messages that propagate into alerting.
+	 *
+	 * @param {string} pMeadowFilterExpression - The filter expression.
+	 * @return {string} The filter, elided past the message length budget.
+	 */
+	_describeFilter(pMeadowFilterExpression)
+	{
+		const tmpBudget = (typeof this.options.filterMessageLengthBudget === 'number') ? this.options.filterMessageLengthBudget : 300;
+		if (typeof pMeadowFilterExpression !== 'string' || pMeadowFilterExpression.length <= tmpBudget)
+		{
+			return pMeadowFilterExpression;
+		}
+		return `${pMeadowFilterExpression.substring(0, tmpBudget)}… (${pMeadowFilterExpression.length} chars)`;
+	}
+
+	/**
+	 * Stamp read-resilience metadata onto an outbound read request. Every read
+	 * this provider issues is non-mutating -- including the POST /:Entity/Query
+	 * reads, which are POSTs only so the filter can travel in the body -- so they
+	 * are all explicitly marked safe for the RestClient to replay.
+	 *
+	 * @param {Record<string, any>} pRequestOptions - The request options object.
+	 * @return {Record<string, any>} The same object, decorated.
+	 */
+	_decorateReadRequestOptions(pRequestOptions)
+	{
+		pRequestOptions.RetrySafe = true;
+		if (this.readRetryConfiguration !== null)
+		{
+			pRequestOptions.Retry = this.readRetryConfiguration;
+		}
+		if (this.readRetryClassifier !== null)
+		{
+			pRequestOptions.RetryClassifier = this.readRetryClassifier;
+		}
+		return pRequestOptions;
+	}
+
+	/**
+	 * Decorate a GET read expressed as a bare URL. GET is already replayable under
+	 * the RestClient's stock policy, so the URL is passed through untouched unless
+	 * this provider carries its own retry configuration to apply -- which keeps the
+	 * call shape (and every consumer spying on it) exactly as it was.
+	 *
+	 * @param {string} pURL - The read URL.
+	 * @return {string|Record<string, any>} The URL, or an options object carrying the retry override.
+	 */
+	_decorateReadURL(pURL)
+	{
+		if (this.readRetryConfiguration === null && this.readRetryClassifier === null)
+		{
+			return pURL;
+		}
+		return this._decorateReadRequestOptions({ url: pURL });
 	}
 
 	/**
@@ -383,17 +478,17 @@ class PictMeadowEntityProvider extends libFableServiceBase
 				const tmpDistinctBody = this._buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, null);
 				tmpDistinctBody.Distinct = true;
 				tmpDistinctBody.Columns = tmpProjection.Columns.join(',');
-				return this.restClient.postJSON({ url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`, body: tmpDistinctBody }, fCallback);
+				return this.restClient.postJSON(this._decorateReadRequestOptions({ url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`, body: tmpDistinctBody }), fCallback);
 			}
 			const tmpDistinctFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
 			const tmpDistinctPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
 			const tmpDistinctURL = `${tmpURLPrefix}${pEntity}s/Distinct/${tmpProjection.Columns.join(',')}${tmpDistinctFilterStanza}${tmpDistinctPageStanza}${tmpPostfix}`;
-			return this.restClient.getJSON(tmpDistinctURL, fCallback);
+			return this.restClient.getJSON(this._decorateReadURL(tmpDistinctURL), fCallback);
 		}
 
 		if (pReadOptions && pReadOptions.SupportsQuery)
 		{
-			const tmpRequestOptions = (
+			const tmpRequestOptions = this._decorateReadRequestOptions(
 				{
 					url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,
 					body: this._buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, tmpProjection)
@@ -408,7 +503,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			: '';
 		const tmpPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
 		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;
-		return this.restClient.getJSON(tmpURL, fCallback);
+		return this.restClient.getJSON(this._decorateReadURL(tmpURL), fCallback);
 	}
 
 	/**
@@ -431,7 +526,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		{
 			const tmpBody = this._buildQueryReadBody(pMeadowFilterExpression, null, null, null);
 			tmpBody.Count = true;
-			const tmpRequestOptions = (
+			const tmpRequestOptions = this._decorateReadRequestOptions(
 				{
 					url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,
 					body: tmpBody
@@ -441,7 +536,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
 		const tmpURL = `${tmpURLPrefix}${pEntity}s/Count${tmpFilterStanza}${tmpPostfix}`;
-		return this.restClient.getJSON(tmpURL, fCallback);
+		return this.restClient.getJSON(this._decorateReadURL(tmpURL), fCallback);
 	}
 
 	/**
@@ -1595,7 +1690,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					{
 						url: `${this.options.urlPrefix}${pEntity}/${pIDRecord}`
 					});
-				tmpOptions = this.prepareRequestOptions(tmpOptions);
+				tmpOptions = this._decorateReadRequestOptions(this.prepareRequestOptions(tmpOptions));
 
 				return this.restClient.getJSON(tmpOptions,
 					(pError, pResponse, pBody) =>
@@ -1914,8 +2009,8 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					{
 						if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
 						{
-							this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-							return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
+							this.log.error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
+							return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
 						}
 
 						// Do not cache projected (Lite/partial) records in the entity cache — a
@@ -1950,12 +2045,12 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					{
 						if (pResponse && pResponse.statusCode && pResponse.statusCode >= 400)
 						{
-							this.log.error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pResponse.statusCode} ${pResponse.statusMessage}`);
-							return fCallback(new Error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pResponse.statusCode} ${JSON.stringify(pBody || {})}`));
+							this.log.error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pResponse.statusCode} ${pResponse.statusMessage}`);
+							return fCallback(new Error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pResponse.statusCode} ${JSON.stringify(pBody || {})}`));
 						}
 						if (pError)
 						{
-							this.log.error(`Error getting entity count of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pError}`);
+							this.log.error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pError}`);
 							return fCallback(pError);
 						}
 						let tmpRecordCount = 0;
@@ -1987,7 +2082,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					{
 						if (pError)
 						{
-							this.log.error(`getEntitySetWithAutoCaching error getting entity set for [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pError}`, { Stack: pError.stack });
+							this.log.error(`getEntitySetWithAutoCaching error getting entity set for [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pError}`, { Stack: pError.stack });
 							return fNext(pError);
 						}
 						tmpRequestState.EntitySet = pEntitySet;
@@ -2033,7 +2128,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 							{
 								if (pError)
 								{
-									this.log.error(`getEntitySetWithAutoCaching error caching connected entity records for [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pError}`, { Stack: pError.stack });
+									this.log.error(`getEntitySetWithAutoCaching error caching connected entity records for [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pError}`, { Stack: pError.stack });
 									return fNext(pError);
 								}
 								return fNext();
@@ -2055,7 +2150,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			{
 				if (pError)
 				{
-					this.log.error(`getEntitySetWithAutoCaching error gathering entity set for [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${pError}`, { Stack: pError.stack });
+					this.log.error(`getEntitySetWithAutoCaching error gathering entity set for [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pError}`, { Stack: pError.stack });
 					return fCallback(pError);
 				}
 				return fCallback(null, tmpRequestState.EntitySet);
@@ -2115,8 +2210,8 @@ class PictMeadowEntityProvider extends libFableServiceBase
 								{
 									const tmpStatusCode = pDownloadResponse ? pDownloadResponse.statusCode : 'no response';
 									const tmpStatusDetail = pDownloadError ? (pDownloadError.message || pDownloadError) : (pDownloadResponse ? pDownloadResponse.statusMessage : '');
-									this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${tmpStatusCode} ${tmpStatusDetail}`);
-									return fCallback(pDownloadError || new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}]: ${tmpStatusCode} ${JSON.stringify(pDownloadBody || {})}`), []);
+									this.log.error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${tmpStatusCode} ${tmpStatusDetail}`);
+									return fCallback(pDownloadError || new Error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${tmpStatusCode} ${JSON.stringify(pDownloadBody || {})}`), []);
 								}
 
 								returnSet = returnSet.concat(pDownloadBody);
@@ -2150,7 +2245,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 
 								if (isNaN(pRecordCount))
 								{
-									this.log.error(`Entity count did not return a number for [${pEntity}] filtered to [${pMeadowFilterExpression}]... something is fatally wrong from the server accessed in getEntitySet call.`);
+									this.log.error(`Entity count did not return a number for [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]... something is fatally wrong from the server accessed in getEntitySet call.`);
 									return fCallback(new Error('Entity count did not return a number in getEntitySet.'));
 								}
 
@@ -2197,8 +2292,8 @@ class PictMeadowEntityProvider extends libFableServiceBase
 											{
 												if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
 												{
-													this.log.error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-													return fDownloadCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${pMeadowFilterExpression}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
+													this.log.error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
+													return fDownloadCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
 												}
 												if (Array.isArray(pDownloadBody))
 												{
