@@ -129,6 +129,41 @@ declare class PictMeadowEntityProvider {
      */
     _describeFilter(pMeadowFilterExpression: string): string;
     /**
+     * Validate a write response before its body is trusted as a saved record.
+     *
+     * The write methods historically inspected only the transport error, so a 4xx/5xx rejection
+     * arrived at the caller as a success whose "record" was really an error envelope. Every caller
+     * in practice branches on the error argument, so a rejected write silently read as a completed
+     * one. Transport errors pass through unchanged.
+     *
+     * @param {string} pOperation - Verb used in the message, e.g. 'creating'.
+     * @param {string} pEntityType - The entity type.
+     * @param {string} pTarget - Identifier for the message (record id, count, ...).
+     * @param {Error|null} pError - The transport error, if any.
+     * @param {Object} [pResponse] - The response.
+     * @param {*} [pBody] - The parsed body.
+     * @return {Error|null} The failure, or null when the write was accepted.
+     */
+    _validateEntityWriteResponse(pOperation: string, pEntityType: string, pTarget: string, pError: Error | null, pResponse?: any, pBody?: any): Error | null;
+    /**
+     * Validate a page read response before its body is trusted as records.
+     *
+     * A 2xx whose body is not an array is a failure, not an empty page. The legacy API reports
+     * errors as HTTP 200 with an `{ Error: ... }` envelope, and treating that as "no records"
+     * silently drops rows out of an assembled entity set — the caller sees fewer records than the
+     * matching Count and no error at all. The unpaged read path has always checked this; the paged
+     * and single-page paths did not.
+     *
+     * @param {string} pEntity - The entity name, for the message.
+     * @param {string} pMeadowFilterExpression - The filter, for the message.
+     * @param {Error|null} pDownloadError - The transport error, if any.
+     * @param {Object} [pDownloadResponse] - The response.
+     * @param {*} [pDownloadBody] - The parsed body.
+     * @param {string} [pPageDescription] - Optional `[begin/cap]` stanza for the message.
+     * @return {Error|null} The failure, or null when the body is a usable record array.
+     */
+    _validateEntityPageResponse(pEntity: string, pMeadowFilterExpression: string, pDownloadError: Error | null, pDownloadResponse?: any, pDownloadBody?: any, pPageDescription?: string): Error | null;
+    /**
      * Stamp read-resilience metadata onto an outbound read request. Every read
      * this provider issues is non-mutating -- including the POST /:Entity/Query
      * reads, which are POSTs only so the filter can travel in the body -- so they

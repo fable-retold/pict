@@ -353,6 +353,82 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	}
 
 	/**
+	 * Validate a write response before its body is trusted as a saved record.
+	 *
+	 * The write methods historically inspected only the transport error, so a 4xx/5xx rejection
+	 * arrived at the caller as a success whose "record" was really an error envelope. Every caller
+	 * in practice branches on the error argument, so a rejected write silently read as a completed
+	 * one. Transport errors pass through unchanged.
+	 *
+	 * @param {string} pOperation - Verb used in the message, e.g. 'creating'.
+	 * @param {string} pEntityType - The entity type.
+	 * @param {string} pTarget - Identifier for the message (record id, count, ...).
+	 * @param {Error|null} pError - The transport error, if any.
+	 * @param {Object} [pResponse] - The response.
+	 * @param {*} [pBody] - The parsed body.
+	 * @return {Error|null} The failure, or null when the write was accepted.
+	 */
+	_validateEntityWriteResponse(pOperation, pEntityType, pTarget, pError, pResponse, pBody)
+	{
+		if (pError)
+		{
+			this.log.error(`Error ${pOperation} ${pEntityType} record ${pTarget}: ${pError.message}`);
+			return pError;
+		}
+
+		if (pResponse && pResponse.statusCode && pResponse.statusCode >= 400)
+		{
+			this.log.error(`Error ${pOperation} ${pEntityType} record ${pTarget}: ${pResponse.statusCode} ${pResponse.statusMessage}`);
+			return new Error(`Error ${pOperation} ${pEntityType} record ${pTarget}: ${pResponse.statusCode} ${JSON.stringify(pBody || {}).substring(0, 300)}`);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Validate a page read response before its body is trusted as records.
+	 *
+	 * A 2xx whose body is not an array is a failure, not an empty page. The legacy API reports
+	 * errors as HTTP 200 with an `{ Error: ... }` envelope, and treating that as "no records"
+	 * silently drops rows out of an assembled entity set — the caller sees fewer records than the
+	 * matching Count and no error at all. The unpaged read path has always checked this; the paged
+	 * and single-page paths did not.
+	 *
+	 * @param {string} pEntity - The entity name, for the message.
+	 * @param {string} pMeadowFilterExpression - The filter, for the message.
+	 * @param {Error|null} pDownloadError - The transport error, if any.
+	 * @param {Object} [pDownloadResponse] - The response.
+	 * @param {*} [pDownloadBody] - The parsed body.
+	 * @param {string} [pPageDescription] - Optional `[begin/cap]` stanza for the message.
+	 * @return {Error|null} The failure, or null when the body is a usable record array.
+	 */
+	_validateEntityPageResponse(pEntity, pMeadowFilterExpression, pDownloadError, pDownloadResponse, pDownloadBody, pPageDescription)
+	{
+		const tmpPageStanza = pPageDescription ? ` ${pPageDescription}` : '';
+		const tmpDescribedFilter = this._describeFilter(pMeadowFilterExpression);
+
+		if (pDownloadError)
+		{
+			return pDownloadError;
+		}
+
+		if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
+		{
+			this.log.error(`Error getting entity set of [${pEntity}] filtered to [${tmpDescribedFilter}]${tmpPageStanza}: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
+			return new Error(`Error getting entity set of [${pEntity}] filtered to [${tmpDescribedFilter}]${tmpPageStanza}: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`);
+		}
+
+		if (!Array.isArray(pDownloadBody))
+		{
+			const tmpStatusCode = (pDownloadResponse && pDownloadResponse.statusCode) ? pDownloadResponse.statusCode : 'no response';
+			this.log.error(`Error getting entity set of [${pEntity}] filtered to [${tmpDescribedFilter}]${tmpPageStanza}: ${tmpStatusCode} response body was not a record array.`);
+			return new Error(`Error getting entity set of [${pEntity}] filtered to [${tmpDescribedFilter}]${tmpPageStanza}: ${tmpStatusCode} response body was not a record array: ${JSON.stringify(pDownloadBody || {}).substring(0, 300)}`);
+		}
+
+		return null;
+	}
+
+	/**
 	 * Stamp read-resilience metadata onto an outbound read request. Every read
 	 * this provider issues is non-mutating -- including the POST /:Entity/Query
 	 * reads, which are POSTs only so the filter can travel in the body -- so they
@@ -2007,10 +2083,11 @@ class PictMeadowEntityProvider extends libFableServiceBase
 					{ SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection },
 					(pDownloadError, pDownloadResponse, pDownloadBody) =>
 					{
-						if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
+						const tmpPageError = this._validateEntityPageResponse(pEntity, pMeadowFilterExpression,
+							pDownloadError, pDownloadResponse, pDownloadBody, `[${pRecordStartCursor}/${pRecordCount}]`);
+						if (tmpPageError)
 						{
-							this.log.error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-							return fCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pRecordStartCursor}/${pRecordCount}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
+							return fCallback(tmpPageError);
 						}
 
 						// Do not cache projected (Lite/partial) records in the entity cache — a
@@ -2022,7 +2099,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 							this.cacheIndividualEntityRecords(pEntity, pDownloadBody, tmpScope);
 						}
 
-						return fCallback(pDownloadError, pDownloadBody);
+						return fCallback(null, pDownloadBody);
 					});
 			});
 	}
@@ -2290,16 +2367,14 @@ class PictMeadowEntityProvider extends libFableServiceBase
 										this._readEntityPage(pEntity, pMeadowFilterExpression, pPage.Begin, tmpDownloadBatchSize, tmpReadOptions,
 											(pDownloadError, pDownloadResponse, pDownloadBody) =>
 											{
-												if (pDownloadResponse && pDownloadResponse.statusCode && pDownloadResponse.statusCode >= 400)
+												const tmpPageError = this._validateEntityPageResponse(pEntity, pMeadowFilterExpression,
+													pDownloadError, pDownloadResponse, pDownloadBody, `[${pPage.Begin}/${tmpDownloadBatchSize}]`);
+												if (tmpPageError)
 												{
-													this.log.error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${pDownloadResponse.statusMessage}`);
-													return fDownloadCallback(new Error(`Error getting entity set of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}] [${pPage.Begin}/${tmpDownloadBatchSize}]: ${pDownloadResponse.statusCode} ${JSON.stringify(pDownloadBody || {})}`));
+													return fDownloadCallback(tmpPageError);
 												}
-												if (Array.isArray(pDownloadBody))
-												{
-													pPage.Records = pDownloadBody;
-												}
-												return fDownloadCallback(pDownloadError);
+												pPage.Records = pDownloadBody;
+												return fDownloadCallback();
 											});
 									},
 									(pFullDownloadError) =>
@@ -2365,15 +2440,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.restClient.postJSON(tmpRequestOptions,
 			(pError, pResponse, pBody) =>
 			{
-				if (pError)
+				const tmpWriteError = this._validateEntityWriteResponse('creating', pEntityType, '', pError, pResponse, pBody);
+				if (tmpWriteError)
 				{
-					this.log.error(`Error creating ${pEntityType} record: ${pError.message}`);
+					return fCallback(tmpWriteError, pBody);
 				}
-				else
-				{
-					this.log.info(`Created ${pEntityType} record ID ${pBody[`ID${pEntityType}`]}`);
-				}
-				return fCallback(pError, pBody);
+				this.log.info(`Created ${pEntityType} record ID ${pBody[`ID${pEntityType}`]}`);
+				return fCallback(null, pBody);
 			});
 	}
 
@@ -2397,15 +2470,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.restClient.putJSON(tmpRequestOptions,
 			(pError, pResponse, pBody) =>
 			{
-				if (pError)
+				const tmpWriteError = this._validateEntityWriteResponse('updating', pEntityType, '', pError, pResponse, pBody);
+				if (tmpWriteError)
 				{
-					this.log.error(`Error updating ${pEntityType} record: ${pError.message}`);
+					return fCallback(tmpWriteError, pBody);
 				}
-				else
-				{
-					this.log.info(`Updated ${pEntityType} record ID ${pBody[`ID${pEntityType}`]}`);
-				}
-				return fCallback(pError, pBody);
+				this.log.info(`Updated ${pEntityType} record ID ${pBody[`ID${pEntityType}`]}`);
+				return fCallback(null, pBody);
 			});
 	}
 
@@ -2429,15 +2500,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.restClient.putJSON(tmpRequestOptions,
 			(pError, pResponse, pBody) =>
 			{
-				if (pError)
+				const tmpWriteError = this._validateEntityWriteResponse('upserting', pEntityType, '', pError, pResponse, pBody);
+				if (tmpWriteError)
 				{
-					this.log.error(`Error upserting ${pEntityType} record: ${pError.message}`);
+					return fCallback(tmpWriteError, pBody);
 				}
-				else
-				{
-					this.log.info(`Upserted ${pEntityType} record ID ${pBody[`ID${pEntityType}`]}`);
-				}
-				return fCallback(pError, pBody);
+				this.log.info(`Upserted ${pEntityType} record ID ${pBody[`ID${pEntityType}`]}`);
+				return fCallback(null, pBody);
 			});
 	}
 
@@ -2461,15 +2530,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.restClient.putJSON(tmpRequestOptions,
 			(pError, pResponse, pBody) =>
 			{
-				if (pError)
+				const tmpWriteError = this._validateEntityWriteResponse('upserting', pEntityType, 'set', pError, pResponse, pBody);
+				if (tmpWriteError)
 				{
-					this.log.error(`Error upserting ${pEntityType} records: ${pError.message}`);
+					return fCallback(tmpWriteError, pBody);
 				}
-				else
-				{
-					this.log.info(`Upserted multiple ${pEntityType} records (count: ${pBody.length})`);
-				}
-				return fCallback(pError, pBody);
+				this.log.info(`Upserted multiple ${pEntityType} records (count: ${Array.isArray(pBody) ? pBody.length : 0})`);
+				return fCallback(null, pBody);
 			});
 	}
 
@@ -2492,15 +2559,13 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.restClient.delJSON(tmpRequestOptions,
 			(pError, pResponse, pBody) =>
 			{
-				if (pError)
+				const tmpWriteError = this._validateEntityWriteResponse('deleting', pEntityType, `ID ${pIDRecord}`, pError, pResponse, pBody);
+				if (tmpWriteError)
 				{
-					this.log.error(`Error deleting ${pEntityType} record ID ${pIDRecord}: ${pError.message}`);
+					return fCallback(tmpWriteError, pBody);
 				}
-				else
-				{
-					this.log.info(`Deleted ${pEntityType} record ID ${pIDRecord}`);
-				}
-				return fCallback(pError, pBody);
+				this.log.info(`Deleted ${pEntityType} record ID ${pIDRecord}`);
+				return fCallback(null, pBody);
 			});
 	}
 }
