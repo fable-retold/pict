@@ -47,6 +47,7 @@ declare class PictMeadowEntityProvider {
      * @type {Function|null}
      */
     readRetryClassifier: Function | null;
+    _legacyRetrySafeStamping: boolean;
     /**
      * Per-(urlPrefix, entity) capability cache. Different entities can resolve
      * to different backend services (and thus different meadow-endpoints
@@ -173,6 +174,29 @@ declare class PictMeadowEntityProvider {
      * @return {Record<string, any>} The same object, decorated.
      */
     _decorateReadRequestOptions(pRequestOptions: Record<string, any>): Record<string, any>;
+    /**
+     * Teach the REST client, once, which meadow routes are replayable reads.
+     *
+     * `POST /:Entity/Query` is a read; it is a POST only so the filter can travel in the body. That
+     * is a property of the route, not of any individual call, so it is registered as a safety hook
+     * rather than stamped onto each request. Anything sharing this client -- pict-section-recordset
+     * reaches straight for `EntityProvider.restClient` -- inherits it without knowing it exists.
+     *
+     * Registration is idempotent per client, so several providers on one client register once.
+     *
+     * @return {void}
+     */
+    _registerReadSafetyHook(): void;
+    /**
+     * Register the provider's outcome classifier with the REST client.
+     *
+     * The hook delegates to `this.readRetryClassifier` at call time rather than capturing it, so a
+     * classifier assigned after construction -- which is the normal case, since fable settings
+     * cannot carry a function -- still takes effect, and everything sharing the client gets it.
+     *
+     * @return {void}
+     */
+    _registerReadClassifierHook(): void;
     /**
      * Decorate a GET read expressed as a bare URL. GET is already replayable under
      * the RestClient's stock policy, so the URL is passed through untouched unless

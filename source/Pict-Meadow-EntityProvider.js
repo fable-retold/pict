@@ -11,6 +11,15 @@ const QUERY_ENDPOINT_MIN_VERSION_BY_MAJOR =
 	4: '4.1.0'
 };
 
+/**
+ * Meadow routes that are reads despite arriving as a POST. `POST /:Entity/Query` carries its filter
+ * in the body purely to escape URI length limits; it mutates nothing. Registered with the REST
+ * client as a safety hook so the fact lives with the route rather than with each call site.
+ *
+ * @type {RegExp}
+ */
+const MEADOW_READ_ROUTE_PATTERN = /\/Query(?:$|[/?])/;
+
 class PictMeadowEntityProvider extends libFableServiceBase
 {
 	constructor(pFable, pOptions, pServiceHash)
@@ -137,6 +146,16 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		 * @type {Function|null}
 		 */
 		this.readRetryClassifier = (typeof this.options.ReadRetryClassifier === 'function') ? this.options.ReadRetryClassifier : null;
+
+		this._legacyRetrySafeStamping = false;
+		this._registerReadSafetyHook();
+		this._registerReadClassifierHook();
+		if (this.readRetryConfiguration !== null && typeof this.restClient.configureRetry === 'function')
+		{
+			// The policy belongs on the client for the same reason the safety hook
+			// does: everything reading through it should behave the same way.
+			this.restClient.configureRetry(this.readRetryConfiguration);
+		}
 
 		/**
 		 * Per-(urlPrefix, entity) capability cache. Different entities can resolve
@@ -439,16 +458,73 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 */
 	_decorateReadRequestOptions(pRequestOptions)
 	{
-		pRequestOptions.RetrySafe = true;
+		if (this._legacyRetrySafeStamping)
+		{
+			// Talking to a RestClient predating the safety-hook chain.
+			pRequestOptions.RetrySafe = true;
+		}
 		if (this.readRetryConfiguration !== null)
 		{
 			pRequestOptions.Retry = this.readRetryConfiguration;
 		}
-		if (this.readRetryClassifier !== null)
-		{
-			pRequestOptions.RetryClassifier = this.readRetryClassifier;
-		}
 		return pRequestOptions;
+	}
+
+	/**
+	 * Teach the REST client, once, which meadow routes are replayable reads.
+	 *
+	 * `POST /:Entity/Query` is a read; it is a POST only so the filter can travel in the body. That
+	 * is a property of the route, not of any individual call, so it is registered as a safety hook
+	 * rather than stamped onto each request. Anything sharing this client -- pict-section-recordset
+	 * reaches straight for `EntityProvider.restClient` -- inherits it without knowing it exists.
+	 *
+	 * Registration is idempotent per client, so several providers on one client register once.
+	 *
+	 * @return {void}
+	 */
+	_registerReadSafetyHook()
+	{
+		if (!this.restClient || (typeof this.restClient.addRetrySafetyHook !== 'function'))
+		{
+			// An older RestClient without the hook chain; the per-request RetrySafe
+			// flag below is the fallback for that case.
+			this._legacyRetrySafeStamping = true;
+			return;
+		}
+		// Keyed, so several providers on one client leave exactly one copy of this
+		// stateless rule rather than one per provider.
+		this.restClient.addRetrySafetyHook(
+			(pContext) =>
+			{
+				const tmpURL = (pContext && pContext.Options && pContext.Options.url) || '';
+				return MEADOW_READ_ROUTE_PATTERN.test(tmpURL) ? true : undefined;
+			}, 'PictMeadowReadSafety');
+	}
+
+	/**
+	 * Register the provider's outcome classifier with the REST client.
+	 *
+	 * The hook delegates to `this.readRetryClassifier` at call time rather than capturing it, so a
+	 * classifier assigned after construction -- which is the normal case, since fable settings
+	 * cannot carry a function -- still takes effect, and everything sharing the client gets it.
+	 *
+	 * @return {void}
+	 */
+	_registerReadClassifierHook()
+	{
+		if (!this.restClient || (typeof this.restClient.addRetryClassifierHook !== 'function'))
+		{
+			return;
+		}
+		// Keyed per provider rather than per client: the safety rule above is
+		// stateless and one copy serves everyone, but this hook delegates to a
+		// specific provider's classifier, so two providers sharing a client must
+		// each keep their own entry.
+		this.restClient.addRetryClassifierHook(
+			(pContext) =>
+			{
+				return (typeof this.readRetryClassifier === 'function') ? this.readRetryClassifier(pContext) : undefined;
+			}, `PictMeadowReadClassifier::${this.UUID}`);
 	}
 
 	/**
@@ -462,7 +538,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 */
 	_decorateReadURL(pURL)
 	{
-		if (this.readRetryConfiguration === null && this.readRetryClassifier === null)
+		if (this.readRetryConfiguration === null && !this._legacyRetrySafeStamping)
 		{
 			return pURL;
 		}

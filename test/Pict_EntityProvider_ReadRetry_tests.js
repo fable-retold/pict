@@ -115,9 +115,10 @@ suite(
 								Expect(pError).to.not.be.an.instanceof(Error);
 								const tmpQueryPosts = tmpHarness.Trace.filter((pR) => pR.Verb === 'POST');
 								Expect(tmpQueryPosts.length).to.be.greaterThan(0);
+								// Safety now lives on the client, so the request itself is bare.
 								for (const tmpPost of tmpQueryPosts)
 								{
-									Expect(tmpPost.Options.RetrySafe).to.equal(true);
+									Expect(tmpPost.Options.RetrySafe).to.equal(undefined);
 								}
 								fTestComplete();
 							});
@@ -132,7 +133,7 @@ suite(
 							() =>
 							{
 								const tmpProbe = tmpHarness.Trace.find((pR) => pR.URL.includes('/Schema'));
-								Expect(tmpProbe.Options.RetrySafe).to.equal(true);
+								Expect(tmpProbe.Options).to.not.equal(null);
 								fTestComplete();
 							});
 					});
@@ -170,56 +171,44 @@ suite(
 								for (const tmpRead of tmpReads)
 								{
 									Expect(tmpRead.Options.Retry).to.deep.equal({ MaxAttempts: 5 });
-									Expect(tmpRead.Options.RetrySafe).to.equal(true);
 								}
 								fTestComplete();
 							});
 					});
 
 				test(
-					'A configured classifier rides along on every read.',
-					function (fTestComplete)
+					'A configured classifier is registered on the client, not stamped per request.',
+					function ()
 					{
-						const fClassifier = (pContext) => ((pContext.Body && pContext.Body.Error) ? 'retry' : null);
-						const tmpHarness = buildHarness({}, { SupportsQuery: true });
-						// Settings cannot carry a function (fable's merge drops them), so a
-						// classifier is always assigned programmatically.
-						tmpHarness.Pict.EntityProvider.readRetryClassifier = fClassifier;
-						tmpHarness.Pict.EntityProvider.getEntitySet('Book', 'FBV~Genre~EQ~SciFi',
-							(pError) =>
-							{
-								Expect(pError).to.not.be.an.instanceof(Error);
-								const tmpDecorated = tmpHarness.Trace.filter((pR) => pR.Options !== null);
-								Expect(tmpDecorated.length).to.be.greaterThan(0);
-								for (const tmpRequest of tmpDecorated)
-								{
-									Expect(tmpRequest.Options.RetryClassifier).to.equal(fClassifier);
-								}
-								fTestComplete();
-							});
+						// The whole point of the hook chain: the classifier reaches every
+						// caller sharing the client, including code that builds its own
+						// requests and never asks the provider to decorate them.
+						const fClassifier = (pContext) => ((pContext.Body && pContext.Body.Error) ? 'retry' : undefined);
+						const tmpPict = new libPict({ Product: 'ClassifierChain' });
+						const tmpClient = tmpPict.EntityProvider.restClient;
+						// Assigned after construction, as an app must: settings cannot carry a function.
+						tmpPict.EntityProvider.readRetryClassifier = fClassifier;
+
+						// A request nobody decorated still gets the classifier's verdict.
+						Expect(tmpClient._classifyRetryOutcome({ Options: { url: '/1.0/Books/Query' }, Body: { Error: 'boom' } })).to.equal('retry');
+						Expect(tmpClient._classifyRetryOutcome({ Options: { url: '/1.0/Books/Query' }, Body: [] })).to.equal(null);
 					});
 
 				test(
-					'A classifier alone promotes GET reads to the options call shape.',
-					function (fTestComplete)
+					'A borrowed client treats POST /Query as replayable with no per-request flag.',
+					function ()
 					{
-						// With no retry config but a classifier present there is still
-						// something to carry, so the bare-URL shortcut must not apply.
-						const fClassifier = () => null;
-						const tmpHarness = buildHarness({}, { SupportsQuery: false });
-						tmpHarness.Pict.EntityProvider.readRetryClassifier = fClassifier;
-						tmpHarness.Pict.EntityProvider.getEntitySet('Book', 'FBV~Genre~EQ~SciFi',
-							(pError) =>
-							{
-								Expect(pError).to.not.be.an.instanceof(Error);
-								const tmpReads = tmpHarness.Trace.filter((pR) => pR.Verb === 'GET' && !pR.URL.includes('/Schema'));
-								Expect(tmpReads.length).to.be.greaterThan(0);
-								for (const tmpRead of tmpReads)
-								{
-									Expect(tmpRead.Options.RetryClassifier).to.equal(fClassifier);
-								}
-								fTestComplete();
-							});
+						// pict-section-recordset builds its own Query POST straight onto
+						// EntityProvider.restClient; it must inherit read safety for free.
+						const tmpPict = new libPict({ Product: 'BorrowedClient' });
+						const tmpClient = tmpPict.EntityProvider.restClient;
+						const tmpPolicy = tmpClient.retryPolicy;
+						Expect(tmpClient._isRetryableRequest({ method: 'POST', url: '/1.0/Books/Query' }, tmpPolicy)).to.equal(true);
+						Expect(tmpClient._isRetryableRequest({ method: 'POST', url: '/1.0/Books/Query/Postfix' }, tmpPolicy)).to.equal(true);
+						// Writes through the same client stay ineligible.
+						Expect(tmpClient._isRetryableRequest({ method: 'POST', url: '/1.0/Books' }, tmpPolicy)).to.equal(false);
+						Expect(tmpClient._isRetryableRequest({ method: 'PUT', url: '/1.0/Books/Upserts' }, tmpPolicy)).to.equal(false);
+						Expect(tmpClient._isRetryableRequest({ method: 'DELETE', url: '/1.0/Books/1' }, tmpPolicy)).to.equal(false);
 					});
 
 				test(
@@ -273,8 +262,8 @@ suite(
 								{
 									return fCallback(null, { statusCode: 200 }, { Count: 5 });
 								}
-								// Every paged read must be marked replayable.
-								Expect(pOptionsOrURL.RetrySafe).to.equal(true);
+								// Paged reads carry the policy; safety comes from the client hook.
+								Expect(pOptionsOrURL.Retry).to.deep.equal({ MaxAttempts: 3 });
 								for (const tmpPageStanza of Object.keys(tmpPages))
 								{
 									if (tmpURL.endsWith(tmpPageStanza))
