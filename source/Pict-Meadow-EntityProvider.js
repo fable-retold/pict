@@ -170,6 +170,70 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		 * @type {Record<string, Array<(pError: Error|null, pSupportsQuery: boolean) => void>>}
 		 */
 		this.endpointCapabilityInflight = {};
+		/**
+		 * Per-(urlPrefix, entity) cache of the `<Entity>/Schema` response BODY,
+		 * so every consumer of the schema shares one round-trip. The capability
+		 * probe and pict-section-recordset's record-schema load both read the
+		 * same URL; without a shared cache each has its own single-flight and the
+		 * identical schema is fetched twice per recordset.
+		 * @type {Record<string, Record<string, any>>}
+		 */
+		this.entitySchemaCache = {};
+		/**
+		 * In-flight schema fetches, keyed identically to the cache, so concurrent
+		 * consumers collapse onto a single request.
+		 * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null) => void>>}
+		 */
+		this.entitySchemaInflight = {};
+	}
+
+	/**
+	 * Fetch (and cache) an entity's `<Entity>/Schema` body, shared across every
+	 * consumer. Concurrent callers for the same (urlPrefix, entity) collapse onto
+	 * one request; a successful fetch also primes the capability cache, so a
+	 * later `resolveEntityQuerySupport` resolves without a probe.
+	 *
+	 * Failures are not cached — they resolve with the error for this call but
+	 * leave the key re-fetchable, matching the capability probe's retry posture.
+	 *
+	 * @param {string} pEntity - The entity name.
+	 * @param {string} [pURLPrefix] - The URL prefix in play.
+	 * @param {(pError: Error|null, pSchema: Record<string, any>|null) => void} fCallback - Completion callback.
+	 * @return {void}
+	 */
+	getEntitySchema(pEntity, pURLPrefix, fCallback)
+	{
+		const tmpKey = this._capabilityKey(pEntity, pURLPrefix);
+		if (tmpKey in this.entitySchemaCache)
+		{
+			return fCallback(null, this.entitySchemaCache[tmpKey]);
+		}
+		if (this.entitySchemaInflight[tmpKey])
+		{
+			this.entitySchemaInflight[tmpKey].push(fCallback);
+			return;
+		}
+		this.entitySchemaInflight[tmpKey] = [ fCallback ];
+		/** @type {Record<string, any>} */
+		let tmpOptions = ({ url: `${pURLPrefix || this.options.urlPrefix}${pEntity}/Schema` });
+		tmpOptions = this._decorateReadRequestOptions(this.prepareRequestOptions(tmpOptions));
+		this.restClient.getJSON(tmpOptions,
+			(pError, pResponse, pBody) =>
+			{
+				if (!pError && pBody)
+				{
+					this.entitySchemaCache[tmpKey] = pBody;
+					// One fetch serves both purposes.
+					try { this.primeEntityCapabilityFromSchema(pEntity, pBody, pURLPrefix); }
+					catch (pPrimeError) { /* capability stays unresolved; the probe can retry */ }
+				}
+				const tmpCallbacks = this.entitySchemaInflight[tmpKey];
+				delete this.entitySchemaInflight[tmpKey];
+				for (let i = 0; i < tmpCallbacks.length; i++)
+				{
+					tmpCallbacks[i](pError || null, pError ? null : pBody);
+				}
+			});
 	}
 
 	/**
@@ -315,12 +379,10 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		}
 		this.endpointCapabilityInflight[tmpKey] = [ fCallback ];
 
-		/** @type {Record<string, any>} */
-		let tmpOptions = ({ url: `${pURLPrefix || this.options.urlPrefix}${pEntity}/Schema` });
-		tmpOptions = this._decorateReadRequestOptions(this.prepareRequestOptions(tmpOptions));
-
-		this.restClient.getJSON(tmpOptions,
-			(pError, pResponse, pBody) =>
+		// Shared schema fetch: if another consumer already loaded (or is loading)
+		// this entity's schema, no second request is made.
+		this.getEntitySchema(pEntity, pURLPrefix,
+			(pError, pBody) =>
 			{
 				let tmpSupportsQuery = false;
 				if (!pError)
