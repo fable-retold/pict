@@ -65,6 +65,36 @@ declare class PictMeadowEntityProvider {
      */
     endpointCapabilityInflight: Record<string, Array<(pError: Error | null, pSupportsQuery: boolean) => void>>;
     /**
+     * Per-(urlPrefix, entity) cache of the `<Entity>/Schema` response BODY,
+     * so every consumer of the schema shares one round-trip. The capability
+     * probe and pict-section-recordset's record-schema load both read the
+     * same URL; without a shared cache each has its own single-flight and the
+     * identical schema is fetched twice per recordset.
+     * @type {Record<string, Record<string, any>>}
+     */
+    entitySchemaCache: Record<string, Record<string, any>>;
+    /**
+     * In-flight schema fetches, keyed identically to the cache, so concurrent
+     * consumers collapse onto a single request.
+     * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null) => void>>}
+     */
+    entitySchemaInflight: Record<string, Array<(pError: Error | null, pSchema: Record<string, any> | null) => void>>;
+    /**
+     * Fetch (and cache) an entity's `<Entity>/Schema` body, shared across every
+     * consumer. Concurrent callers for the same (urlPrefix, entity) collapse onto
+     * one request; a successful fetch also primes the capability cache, so a
+     * later `resolveEntityQuerySupport` resolves without a probe.
+     *
+     * Failures are not cached — they resolve with the error for this call but
+     * leave the key re-fetchable, matching the capability probe's retry posture.
+     *
+     * @param {string} pEntity - The entity name.
+     * @param {string} [pURLPrefix] - The URL prefix in play.
+     * @param {(pError: Error|null, pSchema: Record<string, any>|null) => void} fCallback - Completion callback.
+     * @return {void}
+     */
+    getEntitySchema(pEntity: string, pURLPrefix?: string, fCallback: (pError: Error | null, pSchema: Record<string, any> | null) => void): void;
+    /**
      * Compute the capability cache key for an (entity, urlPrefix) pair.
      *
      * @param {string} pEntity - The entity name.

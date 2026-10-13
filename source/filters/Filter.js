@@ -849,26 +849,26 @@ class FilterMeadowStanzaTokenGenerator
 					tmpGroupedFilters[tmpFilterGroupGUID].Stanzas.push(this._compileSimpleFilterToString(tmpFilter));
 				}
 			}
-			for (const tmpFilterGroupKey of tmpGroupedFilterKeys)
+		}
+		for (const tmpFilterGroupKey of tmpGroupedFilterKeys)
+		{
+			tmpGroupedFilters[tmpFilterGroupKey].Stanzas = tmpGroupedFilters[tmpFilterGroupKey].Stanzas.filter((f) => f.length > 0);
+			if (tmpGroupedFilters[tmpFilterGroupKey].Stanzas.length > 0)
 			{
-				tmpGroupedFilters[tmpFilterGroupKey].Stanzas = tmpGroupedFilters[tmpFilterGroupKey].Stanzas.filter((f) => f.length > 0);
-				if (tmpGroupedFilters[tmpFilterGroupKey].Stanzas.length > 0)
-				{
-					const tmpResolutionStep =
-						{
-							Type: 'MeadowEntity',
-							AllRecords: true,
-							Entity: tmpGroupedFilters[tmpFilterGroupKey].Entity,
-							URLPrefix: tmpGroupedFilters[tmpFilterGroupKey].URLPrefix,
-							Filter: tmpGroupedFilters[tmpFilterGroupKey].Stanzas.join('~'),
-							Destination: `State[Step${tmpGroupedFilters[tmpFilterGroupKey].ComputedIndex}]`,
-						};
-					if (tmpGroupedFilters[tmpFilterGroupKey].PluckColumn)
+				const tmpResolutionStep =
 					{
-						tmpResolutionStep.Projection = { Mode: 'Distinct', Columns: [ tmpGroupedFilters[tmpFilterGroupKey].PluckColumn ] };
-					}
-					tmpBundleConfig.push(tmpResolutionStep);
+						Type: 'MeadowEntity',
+						AllRecords: true,
+						Entity: tmpGroupedFilters[tmpFilterGroupKey].Entity,
+						URLPrefix: tmpGroupedFilters[tmpFilterGroupKey].URLPrefix,
+						Filter: tmpGroupedFilters[tmpFilterGroupKey].Stanzas.join('~'),
+						Destination: `State[Step${tmpGroupedFilters[tmpFilterGroupKey].ComputedIndex}]`,
+					};
+				if (tmpGroupedFilters[tmpFilterGroupKey].PluckColumn)
+				{
+					tmpResolutionStep.Projection = { Mode: 'Distinct', Columns: [ tmpGroupedFilters[tmpFilterGroupKey].PluckColumn ] };
 				}
+				tmpBundleConfig.push(tmpResolutionStep);
 			}
 		}
 		for (const tmpCoreFilterKey of tmpGroupedCoreFilterKeys)
