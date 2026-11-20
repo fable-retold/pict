@@ -27,7 +27,11 @@ class PictTemplateProviderTemplateIfBase extends libPictTemplate
 					case 'string':
 						return (pValueLeft.length > pValueRight);
 					case 'object':
-						return (pValueLeft.length > pValueRight);
+						// typeof null is 'object'. Without this guard the next line reads
+						// null.length and throws, which callers catch and turn into a render
+						// of '' -- the right answer, reached by logging an error for every
+						// null value on every render.
+						return (pValueLeft != null) && (pValueLeft.length > pValueRight);
 					default:
 						return false;
 				}
@@ -38,7 +42,10 @@ class PictTemplateProviderTemplateIfBase extends libPictTemplate
 					case 'string':
 						return (pValueLeft.length < pValueRight);
 					case 'object':
-						return (pValueLeft.length < pValueRight);
+						// A null has no length, so it is not "shorter than" anything either;
+						// the alternative (treating it as length 0) would make null match a
+						// test the author wrote about real content.
+						return (pValueLeft != null) && (pValueLeft.length < pValueRight);
 					default:
 						return false;
 				}
