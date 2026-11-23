@@ -19,6 +19,7 @@
   "files": [
     "source/",
     "dist/",
+    "!dist/indoctrinate_content_staging",
     "types/"
   ],
   "types": "types/source/Pict.d.ts",
