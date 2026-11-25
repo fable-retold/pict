@@ -112,6 +112,25 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		}
 
 		/**
+		 * URL length above which a read whose Query support could not be resolved
+		 * (the capability probe failed) is sent as POST /:Entity/Query anyway. A GET
+		 * that long would be refused by the gateway regardless of server support.
+		 * @type {number}
+		 */
+		if (typeof this.options.UnresolvedQueryURLLengthThreshold === 'number')
+		{
+			this.unresolvedQueryURLLengthThreshold = this.options.UnresolvedQueryURLLengthThreshold;
+		}
+		else if (typeof this.fable.settings.PictMeadowUnresolvedQueryURLLengthThreshold === 'number')
+		{
+			this.unresolvedQueryURLLengthThreshold = this.fable.settings.PictMeadowUnresolvedQueryURLLengthThreshold;
+		}
+		else
+		{
+			this.unresolvedQueryURLLengthThreshold = 4000;
+		}
+
+		/**
 		 * Retry configuration handed to the RestClient on every read this provider
 		 * issues. `null` (the default) inherits whatever policy the RestClient was
 		 * built with -- and the RestClient default is no retry at all, so reads
@@ -182,7 +201,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		/**
 		 * In-flight schema fetches, keyed identically to the cache, so concurrent
 		 * consumers collapse onto a single request.
-		 * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null) => void>>}
+		 * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null, pOutcome?: 'Schema'|'Absent'|'Failed') => void>>}
 		 */
 		this.entitySchemaInflight = {};
 	}
@@ -193,12 +212,14 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * one request; a successful fetch also primes the capability cache, so a
 	 * later `resolveEntityQuerySupport` resolves without a probe.
 	 *
-	 * Failures are not cached — they resolve with the error for this call but
-	 * leave the key re-fetchable, matching the capability probe's retry posture.
+	 * Only a usable schema is cached. Any other response (an auth or server
+	 * error status, or an error object in the body) is handed to this call's
+	 * callers as-is and leaves the key re-fetchable; a missing Schema route
+	 * additionally caches the entity as not supporting Query.
 	 *
 	 * @param {string} pEntity - The entity name.
 	 * @param {string} [pURLPrefix] - The URL prefix in play.
-	 * @param {(pError: Error|null, pSchema: Record<string, any>|null) => void} fCallback - Completion callback.
+	 * @param {(pError: Error|null, pSchema: Record<string, any>|null, pOutcome?: 'Schema'|'Absent'|'Failed') => void} fCallback - Completion callback; pOutcome is the `_classifySchemaResponse` verdict.
 	 * @return {void}
 	 */
 	getEntitySchema(pEntity, pURLPrefix, fCallback)
@@ -220,20 +241,70 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.restClient.getJSON(tmpOptions,
 			(pError, pResponse, pBody) =>
 			{
-				if (!pError && pBody)
+				const tmpOutcome = this._classifySchemaResponse(pError, pResponse, pBody);
+				if (tmpOutcome === 'Schema')
 				{
 					this.entitySchemaCache[tmpKey] = pBody;
 					// One fetch serves both purposes.
-					try { this.primeEntityCapabilityFromSchema(pEntity, pBody, pURLPrefix); }
-					catch (pPrimeError) { /* capability stays unresolved; the probe can retry */ }
+					try
+					{
+						this.primeEntityCapabilityFromSchema(pEntity, pBody, pURLPrefix);
+					}
+					catch (pPrimeError)
+					{
+						// Capability stays unresolved; the probe can retry.
+					}
+				}
+				else if (tmpOutcome === 'Absent')
+				{
+					// The route does not exist, so the server predates the
+					// capability metadata: a definitive answer, safe to cache.
+					this.endpointCapabilityCache[tmpKey] = { SupportsQuery: false, Metadata: null };
 				}
 				const tmpCallbacks = this.entitySchemaInflight[tmpKey];
 				delete this.entitySchemaInflight[tmpKey];
 				for (let i = 0; i < tmpCallbacks.length; i++)
 				{
-					tmpCallbacks[i](pError || null, pError ? null : pBody);
+					tmpCallbacks[i](pError || null, pError ? null : pBody, tmpOutcome);
 				}
 			});
+	}
+
+	/**
+	 * Classify a `<Entity>/Schema` response.
+	 *
+	 * - `Schema`: a usable schema body.
+	 * - `Absent`: the route does not exist (404/405/501) -- the server is too old
+	 *   to serve a schema, which is a stable fact about it.
+	 * - `Failed`: anything else (transport error, auth/gateway/server error, or
+	 *   an error object delivered with a success status). Says nothing about the
+	 *   server's capabilities and must not be cached.
+	 *
+	 * @param {Error|null} pError - Transport error, if any.
+	 * @param {any} pResponse - The HTTP response.
+	 * @param {any} pBody - The parsed response body.
+	 * @return {'Schema'|'Absent'|'Failed'} The outcome.
+	 */
+	_classifySchemaResponse(pError, pResponse, pBody)
+	{
+		if (pError)
+		{
+			return 'Failed';
+		}
+		const tmpStatusCode = (pResponse && typeof pResponse.statusCode === 'number') ? pResponse.statusCode : 200;
+		if ((tmpStatusCode === 404) || (tmpStatusCode === 405) || (tmpStatusCode === 501))
+		{
+			return 'Absent';
+		}
+		if (tmpStatusCode >= 400)
+		{
+			return 'Failed';
+		}
+		if (!pBody || (typeof pBody !== 'object') || Array.isArray(pBody) || (typeof pBody.Error === 'string'))
+		{
+			return 'Failed';
+		}
+		return 'Schema';
 	}
 
 	/**
@@ -338,6 +409,11 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	primeEntityCapabilityFromSchema(pEntity, pSchemaBody, pURLPrefix)
 	{
 		const tmpSupportsQuery = this.evaluateQueryEndpointSupport(pSchemaBody);
+		if (this._classifySchemaResponse(null, null, pSchemaBody) !== 'Schema')
+		{
+			// An error body says nothing about the server's capabilities.
+			return tmpSupportsQuery;
+		}
 		this.endpointCapabilityCache[this._capabilityKey(pEntity, pURLPrefix)] =
 			{
 				SupportsQuery: tmpSupportsQuery,
@@ -351,14 +427,15 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * Schema endpoint once and caching the result per (urlPrefix, entity).
 	 * Concurrent calls for the same key collapse onto a single probe.
 	 *
-	 * Probe failures (network/parse) are NOT cached — they resolve to false (GET
-	 * fallback) for this call but allow a later retry, so a transient blip does
-	 * not permanently disable the faster transport for the session. A successful
-	 * probe of an older server (no metadata) caches false and never re-probes.
+	 * A probe that fails (transport error, auth/gateway/server error, error body)
+	 * is NOT cached and calls back with that error and `false`: support is
+	 * unresolved, the read decides per request (see `_shouldUseQueryTransport`),
+	 * and the next read probes again. A server with no Schema route, or one whose
+	 * schema advertises no metadata, caches false and is never re-probed.
 	 *
 	 * @param {string} pEntity - The entity name.
 	 * @param {string} pURLPrefix - The URL prefix in play.
-	 * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback.
+	 * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback; a non-null error means support is unresolved.
 	 * @return {void}
 	 */
 	resolveEntityQuerySupport(pEntity, pURLPrefix, fCallback)
@@ -382,35 +459,46 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		// Shared schema fetch: if another consumer already loaded (or is loading)
 		// this entity's schema, no second request is made.
 		this.getEntitySchema(pEntity, pURLPrefix,
-			(pError, pBody) =>
+			(pError, pBody, pOutcome) =>
 			{
 				let tmpSupportsQuery = false;
-				if (!pError)
+				let tmpUnresolvedError = null;
+				if (tmpKey in this.endpointCapabilityCache)
+				{
+					// getEntitySchema primed the cache: either from a usable schema, or
+					// as unsupported because the server has no Schema route.
+					tmpSupportsQuery = this.endpointCapabilityCache[tmpKey].SupportsQuery;
+				}
+				else if (pOutcome === 'Schema')
 				{
 					try
 					{
 						tmpSupportsQuery = this.evaluateQueryEndpointSupport(pBody);
+						this.endpointCapabilityCache[tmpKey] =
+							{
+								SupportsQuery: tmpSupportsQuery,
+								Metadata: (pBody && pBody.RetoldMetadata) || null
+							};
 					}
 					catch (pEvaluateError)
 					{
-						tmpSupportsQuery = false;
+						tmpUnresolvedError = pEvaluateError;
 					}
-					// Only cache on a clean probe; transient errors stay re-probeable.
-					this.endpointCapabilityCache[tmpKey] =
-						{
-							SupportsQuery: tmpSupportsQuery,
-							Metadata: (pBody && pBody.RetoldMetadata) || null
-						};
 				}
 				else
 				{
-					this.log.warn(`EntityProvider capability probe for [${pEntity}] failed; falling back to GET reads: ${pError}`);
+					const tmpStatusDetail = pError ? (pError.message || String(pError)) : JSON.stringify(pBody || {}).substring(0, 200);
+					tmpUnresolvedError = new Error(`Schema probe for [${pEntity}] failed: ${tmpStatusDetail}`);
+				}
+				if (tmpUnresolvedError)
+				{
+					this.log.warn(`EntityProvider capability probe for [${pEntity}] failed; Query support unresolved for this read: ${tmpUnresolvedError}`);
 				}
 				const tmpCallbacks = this.endpointCapabilityInflight[tmpKey];
 				delete this.endpointCapabilityInflight[tmpKey];
 				for (let i = 0; i < tmpCallbacks.length; i++)
 				{
-					tmpCallbacks[i](null, tmpSupportsQuery);
+					tmpCallbacks[i](tmpUnresolvedError, tmpSupportsQuery);
 				}
 			});
 	}
@@ -667,6 +755,35 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	}
 
 	/**
+	 * Decide whether a read goes out as POST /:Entity/Query. Known support wins.
+	 * When the capability probe failed (support unresolved) the GET is kept unless
+	 * its URL is over `unresolvedQueryURLLengthThreshold` -- a GET that long is
+	 * refused by the gateway whatever the server supports, so the POST is the
+	 * only request with a chance of succeeding.
+	 *
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved }.
+	 * @param {string} pGetURL - The URL the GET read would use.
+	 * @return {boolean} True to send the read as POST /:Entity/Query.
+	 */
+	_shouldUseQueryTransport(pReadOptions, pGetURL)
+	{
+		if (!pReadOptions)
+		{
+			return false;
+		}
+		if (pReadOptions.SupportsQuery)
+		{
+			return true;
+		}
+		if (pReadOptions.SupportUnresolved && (typeof pGetURL === 'string') && (pGetURL.length > this.unresolvedQueryURLLengthThreshold))
+		{
+			this.log.warn(`EntityProvider Query support unresolved; GET URL of ${pGetURL.length} chars exceeds ${this.unresolvedQueryURLLengthThreshold}, sending as POST Query.`);
+			return true;
+		}
+		return false;
+	}
+
+	/**
 	 * Read a page of an entity set, using POST /:Entity/Query when supported and
 	 * falling back to the legacy GET read otherwise. The callback mirrors
 	 * restClient.getJSON exactly: (pError, pResponse, pBody).
@@ -675,7 +792,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
 	 * @param {number|null} pBegin - Pagination start cursor (null for unpaged).
 	 * @param {number|null} pCap - Pagination page size (null for unpaged).
-	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix, Projection }.
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved, URLPrefix, Postfix, Projection }.
 	 * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
 	 * @return {void}
 	 */
@@ -684,23 +801,29 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		const tmpURLPrefix = (pReadOptions && pReadOptions.URLPrefix) || this.options.urlPrefix;
 		const tmpPostfix = (pReadOptions && pReadOptions.Postfix) || '';
 		const tmpProjection = pReadOptions ? pReadOptions.Projection : null;
+		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
+		const tmpPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
 
 		if (tmpProjection && tmpProjection.Mode === 'Distinct' && Array.isArray(tmpProjection.Columns) && tmpProjection.Columns.length > 0)
 		{
-			if (pReadOptions && pReadOptions.SupportsQuery)
+			const tmpDistinctURL = `${tmpURLPrefix}${pEntity}s/Distinct/${tmpProjection.Columns.join(',')}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;
+			if (this._shouldUseQueryTransport(pReadOptions, tmpDistinctURL))
 			{
 				const tmpDistinctBody = this._buildQueryReadBody(pMeadowFilterExpression, pBegin, pCap, null);
 				tmpDistinctBody.Distinct = true;
 				tmpDistinctBody.Columns = tmpProjection.Columns.join(',');
 				return this.restClient.postJSON(this._decorateReadRequestOptions({ url: `${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`, body: tmpDistinctBody }), fCallback);
 			}
-			const tmpDistinctFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-			const tmpDistinctPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
-			const tmpDistinctURL = `${tmpURLPrefix}${pEntity}s/Distinct/${tmpProjection.Columns.join(',')}${tmpDistinctFilterStanza}${tmpDistinctPageStanza}${tmpPostfix}`;
 			return this.restClient.getJSON(this._decorateReadURL(tmpDistinctURL), fCallback);
 		}
 
-		if (pReadOptions && pReadOptions.SupportsQuery)
+		const tmpLiteProjection = this._resolveLiteProjection(tmpProjection);
+		const tmpProjectionStanza = tmpLiteProjection
+			? (tmpLiteProjection.ExtraColumns ? `/LiteExtended/${tmpLiteProjection.ExtraColumns}` : '/Lite')
+			: '';
+		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;
+
+		if (this._shouldUseQueryTransport(pReadOptions, tmpURL))
 		{
 			const tmpRequestOptions = this._decorateReadRequestOptions(
 				{
@@ -710,13 +833,6 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			return this.restClient.postJSON(tmpRequestOptions, fCallback);
 		}
 
-		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpLiteProjection = this._resolveLiteProjection(tmpProjection);
-		const tmpProjectionStanza = tmpLiteProjection
-			? (tmpLiteProjection.ExtraColumns ? `/LiteExtended/${tmpLiteProjection.ExtraColumns}` : '/Lite')
-			: '';
-		const tmpPageStanza = (typeof pBegin === 'number' && typeof pCap === 'number') ? `/${pBegin}/${pCap}` : '';
-		const tmpURL = `${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;
 		return this.restClient.getJSON(this._decorateReadURL(tmpURL), fCallback);
 	}
 
@@ -727,7 +843,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	 *
 	 * @param {string} pEntity - The entity name.
 	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
-	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix }.
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved, URLPrefix, Postfix }.
 	 * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
 	 * @return {void}
 	 */
@@ -735,8 +851,10 @@ class PictMeadowEntityProvider extends libFableServiceBase
 	{
 		const tmpURLPrefix = (pReadOptions && pReadOptions.URLPrefix) || this.options.urlPrefix;
 		const tmpPostfix = (pReadOptions && pReadOptions.Postfix) || '';
+		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
+		const tmpURL = `${tmpURLPrefix}${pEntity}s/Count${tmpFilterStanza}${tmpPostfix}`;
 
-		if (pReadOptions && pReadOptions.SupportsQuery)
+		if (this._shouldUseQueryTransport(pReadOptions, tmpURL))
 		{
 			const tmpBody = this._buildQueryReadBody(pMeadowFilterExpression, null, null, null);
 			tmpBody.Count = true;
@@ -748,8 +866,6 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			return this.restClient.postJSON(tmpRequestOptions, fCallback);
 		}
 
-		const tmpFilterStanza = pMeadowFilterExpression ? `/FilteredTo/${pMeadowFilterExpression}` : '';
-		const tmpURL = `${tmpURLPrefix}${pEntity}s/Count${tmpFilterStanza}${tmpPostfix}`;
 		return this.restClient.getJSON(this._decorateReadURL(tmpURL), fCallback);
 	}
 
@@ -2218,7 +2334,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			(pSupportError, pSupportsQuery) =>
 			{
 				this._readEntityPage(pEntity, pMeadowFilterExpression, pRecordStartCursor, pRecordCount,
-					{ SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection },
+					{ SupportsQuery: pSupportsQuery, SupportUnresolved: Boolean(pSupportError), URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection },
 					(pDownloadError, pDownloadResponse, pDownloadBody) =>
 					{
 						const tmpPageError = this._validateEntityPageResponse(pEntity, pMeadowFilterExpression,
@@ -2255,7 +2371,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 			(pSupportError, pSupportsQuery) =>
 			{
 				this._readEntityCount(pEntity, pMeadowFilterExpression,
-					{ SupportsQuery: pSupportsQuery, URLPrefix: pURLPrefix || '', Postfix: postfix || '' },
+					{ SupportsQuery: pSupportsQuery, SupportUnresolved: Boolean(pSupportError), URLPrefix: pURLPrefix || '', Postfix: postfix || '' },
 					(pError, pResponse, pBody) =>
 					{
 						if (pResponse && pResponse.statusCode && pResponse.statusCode >= 400)
@@ -2396,7 +2512,7 @@ class PictMeadowEntityProvider extends libFableServiceBase
 		this.resolveEntityQuerySupport(pEntity, tmpURLPrefix,
 			(pSupportError, pSupportsQuery) =>
 			{
-				const tmpReadOptions = { SupportsQuery: pSupportsQuery, URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection };
+				const tmpReadOptions = { SupportsQuery: pSupportsQuery, SupportUnresolved: Boolean(pSupportError), URLPrefix: tmpURLPrefix, Postfix: postfix || '', Projection: tmpProjection };
 
 				// Discard anything from the cache that has expired or is over size.
 				this.recordSetCache[tmpCacheKey].prune(

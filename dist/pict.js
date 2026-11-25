@@ -6715,7 +6715,7 @@ try{if(!global.localStorage)return false;}catch(_){return false;}var val=global.
 // presumably different callback function.
 // This makes sure that own properties are retained, so that
 // decorations and such are not lost along the way.
-module.exports=wrappy;function wrappy(fn,cb){if(fn&&cb)return wrappy(fn)(cb);if(typeof fn!=='function')throw new TypeError('need wrapper function');Object.keys(fn).forEach(function(k){wrapper[k]=fn[k];});return wrapper;function wrapper(){var args=new Array(arguments.length);for(var i=0;i<args.length;i++){args[i]=arguments[i];}var ret=fn.apply(this,args);var cb=args[args.length-1];if(typeof ret==='function'&&ret!==cb){Object.keys(cb).forEach(function(k){ret[k]=cb[k];});}return ret;}}},{}],191:[function(require,module,exports){module.exports=extend;var hasOwnProperty=Object.prototype.hasOwnProperty;function extend(){var target={};for(var i=0;i<arguments.length;i++){var source=arguments[i];for(var key in source){if(hasOwnProperty.call(source,key)){target[key]=source[key];}}}return target;}},{}],192:[function(require,module,exports){module.exports={"name":"pict","version":"1.1.1","description":"Pict browser library.","main":"source/Pict.js","scripts":{"start":"node source/Pict.js","test":"npx quack test","tests":"npx quack test -g","coverage":"npx quack coverage","build":"npx quack build","prepublishOnly":"npx quack build","docker-dev-build":"docker build ./ -f Dockerfile_LUXURYCode -t pict-image:local","docker-dev-run":"docker run -it -d --name pict-dev -p 37447:8080 -p 19506:8086 -v \"$PWD/.config:/home/coder/.config\"  -v \"$PWD:/home/coder/pict\" -u \"$(id -u):$(id -g)\" -e \"DOCKER_USER=$USER\" pict-image:local","docker-dev-shell":"docker exec -it pict-dev /bin/bash","lint":"eslint source/**/*.js test/**/*.js","types":"tsc -p ."},"files":["source/","dist/","!dist/indoctrinate_content_staging","types/"],"types":"types/source/Pict.d.ts","mocha":{"diff":true,"extension":["js"],"package":"./package.json","reporter":"spec","slow":"75","timeout":"5000","ui":"tdd","watch-files":["source/**/*.js","test/**/*.js"],"watch-ignore":["lib/vendor"]},"repository":{"type":"git","url":"git+https://github.com/fable-retold/pict.git"},"author":"steven velozo <steven@velozo.com>","license":"MIT","bugs":{"url":"https://github.com/fable-retold/pict/issues"},"homepage":"https://github.com/fable-retold/pict#readme","devDependencies":{"@eslint/js":"^9.39.1","@types/jquery":"^3.5.33","@types/sinon":"^17.0.4","eslint":"^9.39.1","globals":"^16.5.0","pict-docuserve":"^1.4.19","quackage":"^1.3.1","sinon":"^20.0.0","typescript":"^5.9.3"},"dependencies":{"cachetrax":"^1.0.6","fable":"^3.1.86","pict-application":"^1.0.34","pict-provider":"^1.0.13","pict-template":"^1.0.15","pict-view":"^1.0.68"}};},{}],193:[function(require,module,exports){// This assumes Pict has been required in the browser. Delcare these as globals so linter can do its job.
+module.exports=wrappy;function wrappy(fn,cb){if(fn&&cb)return wrappy(fn)(cb);if(typeof fn!=='function')throw new TypeError('need wrapper function');Object.keys(fn).forEach(function(k){wrapper[k]=fn[k];});return wrapper;function wrapper(){var args=new Array(arguments.length);for(var i=0;i<args.length;i++){args[i]=arguments[i];}var ret=fn.apply(this,args);var cb=args[args.length-1];if(typeof ret==='function'&&ret!==cb){Object.keys(cb).forEach(function(k){ret[k]=cb[k];});}return ret;}}},{}],191:[function(require,module,exports){module.exports=extend;var hasOwnProperty=Object.prototype.hasOwnProperty;function extend(){var target={};for(var i=0;i<arguments.length;i++){var source=arguments[i];for(var key in source){if(hasOwnProperty.call(source,key)){target[key]=source[key];}}}return target;}},{}],192:[function(require,module,exports){module.exports={"name":"pict","version":"1.1.2","description":"Pict browser library.","main":"source/Pict.js","scripts":{"start":"node source/Pict.js","test":"npx quack test","tests":"npx quack test -g","coverage":"npx quack coverage","build":"npx quack build","prepublishOnly":"npx quack build","docker-dev-build":"docker build ./ -f Dockerfile_LUXURYCode -t pict-image:local","docker-dev-run":"docker run -it -d --name pict-dev -p 37447:8080 -p 19506:8086 -v \"$PWD/.config:/home/coder/.config\"  -v \"$PWD:/home/coder/pict\" -u \"$(id -u):$(id -g)\" -e \"DOCKER_USER=$USER\" pict-image:local","docker-dev-shell":"docker exec -it pict-dev /bin/bash","lint":"eslint source/**/*.js test/**/*.js","types":"tsc -p ."},"files":["source/","dist/","!dist/indoctrinate_content_staging","types/"],"types":"types/source/Pict.d.ts","mocha":{"diff":true,"extension":["js"],"package":"./package.json","reporter":"spec","slow":"75","timeout":"5000","ui":"tdd","watch-files":["source/**/*.js","test/**/*.js"],"watch-ignore":["lib/vendor"]},"repository":{"type":"git","url":"git+https://github.com/fable-retold/pict.git"},"author":"steven velozo <steven@velozo.com>","license":"MIT","bugs":{"url":"https://github.com/fable-retold/pict/issues"},"homepage":"https://github.com/fable-retold/pict#readme","devDependencies":{"@eslint/js":"^9.39.1","@types/jquery":"^3.5.33","@types/sinon":"^17.0.4","eslint":"^9.39.1","globals":"^16.5.0","pict-docuserve":"^1.4.19","quackage":"^1.3.1","sinon":"^20.0.0","typescript":"^5.9.3"},"dependencies":{"cachetrax":"^1.0.6","fable":"^3.1.86","pict-application":"^1.0.34","pict-provider":"^1.0.13","pict-template":"^1.0.15","pict-view":"^1.0.68"}};},{}],193:[function(require,module,exports){// This assumes Pict has been required in the browser. Delcare these as globals so linter can do its job.
 /* global Pict, _Pict: writeable *//**
  * Simple function to load a pict Application
  *
@@ -6952,6 +6952,11 @@ this.restClient=(_this$fable$RestClien=this.fable.RestClient)!==null&&_this$fabl
 // false the provider always uses the legacy GET reads (no capability
 // probe is ever issued). Defaults on; opt out via option or setting.
 if(typeof this.options.UseQueryEndpoint==='boolean'){this.useQueryEndpoint=this.options.UseQueryEndpoint;}else if(typeof this.fable.settings.PictMeadowUseQueryEndpoint==='boolean'){this.useQueryEndpoint=this.fable.settings.PictMeadowUseQueryEndpoint;}else{this.useQueryEndpoint=true;}/**
+		 * URL length above which a read whose Query support could not be resolved
+		 * (the capability probe failed) is sent as POST /:Entity/Query anyway. A GET
+		 * that long would be refused by the gateway regardless of server support.
+		 * @type {number}
+		 */if(typeof this.options.UnresolvedQueryURLLengthThreshold==='number'){this.unresolvedQueryURLLengthThreshold=this.options.UnresolvedQueryURLLengthThreshold;}else if(typeof this.fable.settings.PictMeadowUnresolvedQueryURLLengthThreshold==='number'){this.unresolvedQueryURLLengthThreshold=this.fable.settings.PictMeadowUnresolvedQueryURLLengthThreshold;}else{this.unresolvedQueryURLLengthThreshold=4000;}/**
 		 * Retry configuration handed to the RestClient on every read this provider
 		 * issues. `null` (the default) inherits whatever policy the RestClient was
 		 * built with -- and the RestClient default is no retry at all, so reads
@@ -6991,22 +6996,41 @@ this.restClient.configureRetry(this.readRetryConfiguration);}/**
 		 */this.entitySchemaCache={};/**
 		 * In-flight schema fetches, keyed identically to the cache, so concurrent
 		 * consumers collapse onto a single request.
-		 * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null) => void>>}
+		 * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null, pOutcome?: 'Schema'|'Absent'|'Failed') => void>>}
 		 */this.entitySchemaInflight={};}/**
 	 * Fetch (and cache) an entity's `<Entity>/Schema` body, shared across every
 	 * consumer. Concurrent callers for the same (urlPrefix, entity) collapse onto
 	 * one request; a successful fetch also primes the capability cache, so a
 	 * later `resolveEntityQuerySupport` resolves without a probe.
 	 *
-	 * Failures are not cached — they resolve with the error for this call but
-	 * leave the key re-fetchable, matching the capability probe's retry posture.
+	 * Only a usable schema is cached. Any other response (an auth or server
+	 * error status, or an error object in the body) is handed to this call's
+	 * callers as-is and leaves the key re-fetchable; a missing Schema route
+	 * additionally caches the entity as not supporting Query.
 	 *
 	 * @param {string} pEntity - The entity name.
 	 * @param {string} [pURLPrefix] - The URL prefix in play.
-	 * @param {(pError: Error|null, pSchema: Record<string, any>|null) => void} fCallback - Completion callback.
+	 * @param {(pError: Error|null, pSchema: Record<string, any>|null, pOutcome?: 'Schema'|'Absent'|'Failed') => void} fCallback - Completion callback; pOutcome is the `_classifySchemaResponse` verdict.
 	 * @return {void}
-	 */getEntitySchema(pEntity,pURLPrefix,fCallback){const tmpKey=this._capabilityKey(pEntity,pURLPrefix);if(tmpKey in this.entitySchemaCache){return fCallback(null,this.entitySchemaCache[tmpKey]);}if(this.entitySchemaInflight[tmpKey]){this.entitySchemaInflight[tmpKey].push(fCallback);return;}this.entitySchemaInflight[tmpKey]=[fCallback];/** @type {Record<string, any>} */let tmpOptions={url:`${pURLPrefix||this.options.urlPrefix}${pEntity}/Schema`};tmpOptions=this._decorateReadRequestOptions(this.prepareRequestOptions(tmpOptions));this.restClient.getJSON(tmpOptions,(pError,pResponse,pBody)=>{if(!pError&&pBody){this.entitySchemaCache[tmpKey]=pBody;// One fetch serves both purposes.
-try{this.primeEntityCapabilityFromSchema(pEntity,pBody,pURLPrefix);}catch(pPrimeError){/* capability stays unresolved; the probe can retry */}}const tmpCallbacks=this.entitySchemaInflight[tmpKey];delete this.entitySchemaInflight[tmpKey];for(let i=0;i<tmpCallbacks.length;i++){tmpCallbacks[i](pError||null,pError?null:pBody);}});}/**
+	 */getEntitySchema(pEntity,pURLPrefix,fCallback){const tmpKey=this._capabilityKey(pEntity,pURLPrefix);if(tmpKey in this.entitySchemaCache){return fCallback(null,this.entitySchemaCache[tmpKey]);}if(this.entitySchemaInflight[tmpKey]){this.entitySchemaInflight[tmpKey].push(fCallback);return;}this.entitySchemaInflight[tmpKey]=[fCallback];/** @type {Record<string, any>} */let tmpOptions={url:`${pURLPrefix||this.options.urlPrefix}${pEntity}/Schema`};tmpOptions=this._decorateReadRequestOptions(this.prepareRequestOptions(tmpOptions));this.restClient.getJSON(tmpOptions,(pError,pResponse,pBody)=>{const tmpOutcome=this._classifySchemaResponse(pError,pResponse,pBody);if(tmpOutcome==='Schema'){this.entitySchemaCache[tmpKey]=pBody;// One fetch serves both purposes.
+try{this.primeEntityCapabilityFromSchema(pEntity,pBody,pURLPrefix);}catch(pPrimeError){// Capability stays unresolved; the probe can retry.
+}}else if(tmpOutcome==='Absent'){// The route does not exist, so the server predates the
+// capability metadata: a definitive answer, safe to cache.
+this.endpointCapabilityCache[tmpKey]={SupportsQuery:false,Metadata:null};}const tmpCallbacks=this.entitySchemaInflight[tmpKey];delete this.entitySchemaInflight[tmpKey];for(let i=0;i<tmpCallbacks.length;i++){tmpCallbacks[i](pError||null,pError?null:pBody,tmpOutcome);}});}/**
+	 * Classify a `<Entity>/Schema` response.
+	 *
+	 * - `Schema`: a usable schema body.
+	 * - `Absent`: the route does not exist (404/405/501) -- the server is too old
+	 *   to serve a schema, which is a stable fact about it.
+	 * - `Failed`: anything else (transport error, auth/gateway/server error, or
+	 *   an error object delivered with a success status). Says nothing about the
+	 *   server's capabilities and must not be cached.
+	 *
+	 * @param {Error|null} pError - Transport error, if any.
+	 * @param {any} pResponse - The HTTP response.
+	 * @param {any} pBody - The parsed response body.
+	 * @return {'Schema'|'Absent'|'Failed'} The outcome.
+	 */_classifySchemaResponse(pError,pResponse,pBody){if(pError){return'Failed';}const tmpStatusCode=pResponse&&typeof pResponse.statusCode==='number'?pResponse.statusCode:200;if(tmpStatusCode===404||tmpStatusCode===405||tmpStatusCode===501){return'Absent';}if(tmpStatusCode>=400){return'Failed';}if(!pBody||typeof pBody!=='object'||Array.isArray(pBody)||typeof pBody.Error==='string'){return'Failed';}return'Schema';}/**
 	 * Compute the capability cache key for an (entity, urlPrefix) pair.
 	 *
 	 * @param {string} pEntity - The entity name.
@@ -7039,24 +7063,27 @@ for(let i=0;i<3;i++){const tmpHave=isNaN(tmpParts[i])?0:tmpParts[i];const tmpNee
 	 * @param {Record<string, any>} pSchemaBody - The Schema endpoint response body.
 	 * @param {string} [pURLPrefix] - The URL prefix the schema was fetched from.
 	 * @return {boolean} The resolved support value now cached.
-	 */primeEntityCapabilityFromSchema(pEntity,pSchemaBody,pURLPrefix){const tmpSupportsQuery=this.evaluateQueryEndpointSupport(pSchemaBody);this.endpointCapabilityCache[this._capabilityKey(pEntity,pURLPrefix)]={SupportsQuery:tmpSupportsQuery,Metadata:pSchemaBody&&pSchemaBody.RetoldMetadata||null};return tmpSupportsQuery;}/**
+	 */primeEntityCapabilityFromSchema(pEntity,pSchemaBody,pURLPrefix){const tmpSupportsQuery=this.evaluateQueryEndpointSupport(pSchemaBody);if(this._classifySchemaResponse(null,null,pSchemaBody)!=='Schema'){// An error body says nothing about the server's capabilities.
+return tmpSupportsQuery;}this.endpointCapabilityCache[this._capabilityKey(pEntity,pURLPrefix)]={SupportsQuery:tmpSupportsQuery,Metadata:pSchemaBody&&pSchemaBody.RetoldMetadata||null};return tmpSupportsQuery;}/**
 	 * Resolve whether POST /:Entity/Query is usable for an entity, probing the
 	 * Schema endpoint once and caching the result per (urlPrefix, entity).
 	 * Concurrent calls for the same key collapse onto a single probe.
 	 *
-	 * Probe failures (network/parse) are NOT cached — they resolve to false (GET
-	 * fallback) for this call but allow a later retry, so a transient blip does
-	 * not permanently disable the faster transport for the session. A successful
-	 * probe of an older server (no metadata) caches false and never re-probes.
+	 * A probe that fails (transport error, auth/gateway/server error, error body)
+	 * is NOT cached and calls back with that error and `false`: support is
+	 * unresolved, the read decides per request (see `_shouldUseQueryTransport`),
+	 * and the next read probes again. A server with no Schema route, or one whose
+	 * schema advertises no metadata, caches false and is never re-probed.
 	 *
 	 * @param {string} pEntity - The entity name.
 	 * @param {string} pURLPrefix - The URL prefix in play.
-	 * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback.
+	 * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback; a non-null error means support is unresolved.
 	 * @return {void}
 	 */resolveEntityQuerySupport(pEntity,pURLPrefix,fCallback){if(!this.useQueryEndpoint){return fCallback(null,false);}const tmpKey=this._capabilityKey(pEntity,pURLPrefix);if(tmpKey in this.endpointCapabilityCache){return fCallback(null,this.endpointCapabilityCache[tmpKey].SupportsQuery);}if(this.endpointCapabilityInflight[tmpKey]){this.endpointCapabilityInflight[tmpKey].push(fCallback);return;}this.endpointCapabilityInflight[tmpKey]=[fCallback];// Shared schema fetch: if another consumer already loaded (or is loading)
 // this entity's schema, no second request is made.
-this.getEntitySchema(pEntity,pURLPrefix,(pError,pBody)=>{let tmpSupportsQuery=false;if(!pError){try{tmpSupportsQuery=this.evaluateQueryEndpointSupport(pBody);}catch(pEvaluateError){tmpSupportsQuery=false;}// Only cache on a clean probe; transient errors stay re-probeable.
-this.endpointCapabilityCache[tmpKey]={SupportsQuery:tmpSupportsQuery,Metadata:pBody&&pBody.RetoldMetadata||null};}else{this.log.warn(`EntityProvider capability probe for [${pEntity}] failed; falling back to GET reads: ${pError}`);}const tmpCallbacks=this.endpointCapabilityInflight[tmpKey];delete this.endpointCapabilityInflight[tmpKey];for(let i=0;i<tmpCallbacks.length;i++){tmpCallbacks[i](null,tmpSupportsQuery);}});}/**
+this.getEntitySchema(pEntity,pURLPrefix,(pError,pBody,pOutcome)=>{let tmpSupportsQuery=false;let tmpUnresolvedError=null;if(tmpKey in this.endpointCapabilityCache){// getEntitySchema primed the cache: either from a usable schema, or
+// as unsupported because the server has no Schema route.
+tmpSupportsQuery=this.endpointCapabilityCache[tmpKey].SupportsQuery;}else if(pOutcome==='Schema'){try{tmpSupportsQuery=this.evaluateQueryEndpointSupport(pBody);this.endpointCapabilityCache[tmpKey]={SupportsQuery:tmpSupportsQuery,Metadata:pBody&&pBody.RetoldMetadata||null};}catch(pEvaluateError){tmpUnresolvedError=pEvaluateError;}}else{const tmpStatusDetail=pError?pError.message||String(pError):JSON.stringify(pBody||{}).substring(0,200);tmpUnresolvedError=new Error(`Schema probe for [${pEntity}] failed: ${tmpStatusDetail}`);}if(tmpUnresolvedError){this.log.warn(`EntityProvider capability probe for [${pEntity}] failed; Query support unresolved for this read: ${tmpUnresolvedError}`);}const tmpCallbacks=this.endpointCapabilityInflight[tmpKey];delete this.endpointCapabilityInflight[tmpKey];for(let i=0;i<tmpCallbacks.length;i++){tmpCallbacks[i](tmpUnresolvedError,tmpSupportsQuery);}});}/**
 	 * Render a filter expression for inclusion in an error or log message. A
 	 * chunked ID read carries thousands of IDs in its filter; embedding it whole
 	 * produces multi-kilobyte Error messages that propagate into alerting.
@@ -7156,6 +7183,16 @@ this.restClient.addRetryClassifierHook(pContext=>{return typeof this.readRetryCl
 	 */_buildQueryReadBody(pMeadowFilterExpression,pBegin,pCap,pProjection){/** @type {Record<string, any>} */const tmpBody={};if(pMeadowFilterExpression){tmpBody.Filter=pMeadowFilterExpression;}if(typeof pBegin==='number'){tmpBody.Begin=pBegin;}if(typeof pCap==='number'){tmpBody.Cap=pCap;}const tmpLiteProjection=this._resolveLiteProjection(pProjection);if(tmpLiteProjection){// Lite/LiteExtended GET reads map to a Lite Query read; ExtraColumns
 // carries the LiteExtended column list when present.
 tmpBody.Lite=true;if(tmpLiteProjection.ExtraColumns){tmpBody.ExtraColumns=tmpLiteProjection.ExtraColumns;}}return tmpBody;}/**
+	 * Decide whether a read goes out as POST /:Entity/Query. Known support wins.
+	 * When the capability probe failed (support unresolved) the GET is kept unless
+	 * its URL is over `unresolvedQueryURLLengthThreshold` -- a GET that long is
+	 * refused by the gateway whatever the server supports, so the POST is the
+	 * only request with a chance of succeeding.
+	 *
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved }.
+	 * @param {string} pGetURL - The URL the GET read would use.
+	 * @return {boolean} True to send the read as POST /:Entity/Query.
+	 */_shouldUseQueryTransport(pReadOptions,pGetURL){if(!pReadOptions){return false;}if(pReadOptions.SupportsQuery){return true;}if(pReadOptions.SupportUnresolved&&typeof pGetURL==='string'&&pGetURL.length>this.unresolvedQueryURLLengthThreshold){this.log.warn(`EntityProvider Query support unresolved; GET URL of ${pGetURL.length} chars exceeds ${this.unresolvedQueryURLLengthThreshold}, sending as POST Query.`);return true;}return false;}/**
 	 * Read a page of an entity set, using POST /:Entity/Query when supported and
 	 * falling back to the legacy GET read otherwise. The callback mirrors
 	 * restClient.getJSON exactly: (pError, pResponse, pBody).
@@ -7164,20 +7201,20 @@ tmpBody.Lite=true;if(tmpLiteProjection.ExtraColumns){tmpBody.ExtraColumns=tmpLit
 	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
 	 * @param {number|null} pBegin - Pagination start cursor (null for unpaged).
 	 * @param {number|null} pCap - Pagination page size (null for unpaged).
-	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix, Projection }.
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved, URLPrefix, Postfix, Projection }.
 	 * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
 	 * @return {void}
-	 */_readEntityPage(pEntity,pMeadowFilterExpression,pBegin,pCap,pReadOptions,fCallback){const tmpURLPrefix=pReadOptions&&pReadOptions.URLPrefix||this.options.urlPrefix;const tmpPostfix=pReadOptions&&pReadOptions.Postfix||'';const tmpProjection=pReadOptions?pReadOptions.Projection:null;if(tmpProjection&&tmpProjection.Mode==='Distinct'&&Array.isArray(tmpProjection.Columns)&&tmpProjection.Columns.length>0){if(pReadOptions&&pReadOptions.SupportsQuery){const tmpDistinctBody=this._buildQueryReadBody(pMeadowFilterExpression,pBegin,pCap,null);tmpDistinctBody.Distinct=true;tmpDistinctBody.Columns=tmpProjection.Columns.join(',');return this.restClient.postJSON(this._decorateReadRequestOptions({url:`${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,body:tmpDistinctBody}),fCallback);}const tmpDistinctFilterStanza=pMeadowFilterExpression?`/FilteredTo/${pMeadowFilterExpression}`:'';const tmpDistinctPageStanza=typeof pBegin==='number'&&typeof pCap==='number'?`/${pBegin}/${pCap}`:'';const tmpDistinctURL=`${tmpURLPrefix}${pEntity}s/Distinct/${tmpProjection.Columns.join(',')}${tmpDistinctFilterStanza}${tmpDistinctPageStanza}${tmpPostfix}`;return this.restClient.getJSON(this._decorateReadURL(tmpDistinctURL),fCallback);}if(pReadOptions&&pReadOptions.SupportsQuery){const tmpRequestOptions=this._decorateReadRequestOptions({url:`${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,body:this._buildQueryReadBody(pMeadowFilterExpression,pBegin,pCap,tmpProjection)});return this.restClient.postJSON(tmpRequestOptions,fCallback);}const tmpFilterStanza=pMeadowFilterExpression?`/FilteredTo/${pMeadowFilterExpression}`:'';const tmpLiteProjection=this._resolveLiteProjection(tmpProjection);const tmpProjectionStanza=tmpLiteProjection?tmpLiteProjection.ExtraColumns?`/LiteExtended/${tmpLiteProjection.ExtraColumns}`:'/Lite':'';const tmpPageStanza=typeof pBegin==='number'&&typeof pCap==='number'?`/${pBegin}/${pCap}`:'';const tmpURL=`${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;return this.restClient.getJSON(this._decorateReadURL(tmpURL),fCallback);}/**
+	 */_readEntityPage(pEntity,pMeadowFilterExpression,pBegin,pCap,pReadOptions,fCallback){const tmpURLPrefix=pReadOptions&&pReadOptions.URLPrefix||this.options.urlPrefix;const tmpPostfix=pReadOptions&&pReadOptions.Postfix||'';const tmpProjection=pReadOptions?pReadOptions.Projection:null;const tmpFilterStanza=pMeadowFilterExpression?`/FilteredTo/${pMeadowFilterExpression}`:'';const tmpPageStanza=typeof pBegin==='number'&&typeof pCap==='number'?`/${pBegin}/${pCap}`:'';if(tmpProjection&&tmpProjection.Mode==='Distinct'&&Array.isArray(tmpProjection.Columns)&&tmpProjection.Columns.length>0){const tmpDistinctURL=`${tmpURLPrefix}${pEntity}s/Distinct/${tmpProjection.Columns.join(',')}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;if(this._shouldUseQueryTransport(pReadOptions,tmpDistinctURL)){const tmpDistinctBody=this._buildQueryReadBody(pMeadowFilterExpression,pBegin,pCap,null);tmpDistinctBody.Distinct=true;tmpDistinctBody.Columns=tmpProjection.Columns.join(',');return this.restClient.postJSON(this._decorateReadRequestOptions({url:`${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,body:tmpDistinctBody}),fCallback);}return this.restClient.getJSON(this._decorateReadURL(tmpDistinctURL),fCallback);}const tmpLiteProjection=this._resolveLiteProjection(tmpProjection);const tmpProjectionStanza=tmpLiteProjection?tmpLiteProjection.ExtraColumns?`/LiteExtended/${tmpLiteProjection.ExtraColumns}`:'/Lite':'';const tmpURL=`${tmpURLPrefix}${pEntity}s${tmpProjectionStanza}${tmpFilterStanza}${tmpPageStanza}${tmpPostfix}`;if(this._shouldUseQueryTransport(pReadOptions,tmpURL)){const tmpRequestOptions=this._decorateReadRequestOptions({url:`${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,body:this._buildQueryReadBody(pMeadowFilterExpression,pBegin,pCap,tmpProjection)});return this.restClient.postJSON(tmpRequestOptions,fCallback);}return this.restClient.getJSON(this._decorateReadURL(tmpURL),fCallback);}/**
 	 * Read the count of an entity set, using POST /:Entity/Query (Count mode)
 	 * when supported and the legacy GET Count otherwise. The callback mirrors
 	 * restClient.getJSON: (pError, pResponse, pBody) where pBody carries .Count.
 	 *
 	 * @param {string} pEntity - The entity name.
 	 * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
-	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix }.
+	 * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved, URLPrefix, Postfix }.
 	 * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
 	 * @return {void}
-	 */_readEntityCount(pEntity,pMeadowFilterExpression,pReadOptions,fCallback){const tmpURLPrefix=pReadOptions&&pReadOptions.URLPrefix||this.options.urlPrefix;const tmpPostfix=pReadOptions&&pReadOptions.Postfix||'';if(pReadOptions&&pReadOptions.SupportsQuery){const tmpBody=this._buildQueryReadBody(pMeadowFilterExpression,null,null,null);tmpBody.Count=true;const tmpRequestOptions=this._decorateReadRequestOptions({url:`${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,body:tmpBody});return this.restClient.postJSON(tmpRequestOptions,fCallback);}const tmpFilterStanza=pMeadowFilterExpression?`/FilteredTo/${pMeadowFilterExpression}`:'';const tmpURL=`${tmpURLPrefix}${pEntity}s/Count${tmpFilterStanza}${tmpPostfix}`;return this.restClient.getJSON(this._decorateReadURL(tmpURL),fCallback);}/**
+	 */_readEntityCount(pEntity,pMeadowFilterExpression,pReadOptions,fCallback){const tmpURLPrefix=pReadOptions&&pReadOptions.URLPrefix||this.options.urlPrefix;const tmpPostfix=pReadOptions&&pReadOptions.Postfix||'';const tmpFilterStanza=pMeadowFilterExpression?`/FilteredTo/${pMeadowFilterExpression}`:'';const tmpURL=`${tmpURLPrefix}${pEntity}s/Count${tmpFilterStanza}${tmpPostfix}`;if(this._shouldUseQueryTransport(pReadOptions,tmpURL)){const tmpBody=this._buildQueryReadBody(pMeadowFilterExpression,null,null,null);tmpBody.Count=true;const tmpRequestOptions=this._decorateReadRequestOptions({url:`${tmpURLPrefix}${pEntity}s/Query${tmpPostfix}`,body:tmpBody});return this.restClient.postJSON(tmpRequestOptions,fCallback);}return this.restClient.getJSON(this._decorateReadURL(tmpURL),fCallback);}/**
 	 * Compute the cache bucket key for an entity, optionally namespaced by a scope.
 	 * A non-empty scope yields an isolated bucket (`Entity::Scope`) so scoped/partial
 	 * (e.g. Lite) records never touch the global `Entity` cache that full-record
@@ -7461,7 +7498,7 @@ const tmpSpeculativeRecordIDColumn=`ID${pEntity}`;if(tmpEntitySet[0]&&typeof tmp
 const tmpURLPrefix=pURLPrefix||pOptions&&pOptions.URLPrefix||this.options.urlPrefix;// LiteExtended projection: fetch only ID/GUID/owner/update + the requested
 // ExtraColumns (drops blob columns). Used by scoped list fetches to avoid the
 // heavy full-record payload.
-const tmpProjection=pOptions&&pOptions.Projection?pOptions.Projection:null;this.resolveEntityQuerySupport(pEntity,tmpURLPrefix,(pSupportError,pSupportsQuery)=>{this._readEntityPage(pEntity,pMeadowFilterExpression,pRecordStartCursor,pRecordCount,{SupportsQuery:pSupportsQuery,URLPrefix:tmpURLPrefix,Postfix:postfix||'',Projection:tmpProjection},(pDownloadError,pDownloadResponse,pDownloadBody)=>{const tmpPageError=this._validateEntityPageResponse(pEntity,pMeadowFilterExpression,pDownloadError,pDownloadResponse,pDownloadBody,`[${pRecordStartCursor}/${pRecordCount}]`);if(tmpPageError){return fCallback(tmpPageError);}// Do not cache projected (Lite/partial) records in the entity cache — a
+const tmpProjection=pOptions&&pOptions.Projection?pOptions.Projection:null;this.resolveEntityQuerySupport(pEntity,tmpURLPrefix,(pSupportError,pSupportsQuery)=>{this._readEntityPage(pEntity,pMeadowFilterExpression,pRecordStartCursor,pRecordCount,{SupportsQuery:pSupportsQuery,SupportUnresolved:Boolean(pSupportError),URLPrefix:tmpURLPrefix,Postfix:postfix||'',Projection:tmpProjection},(pDownloadError,pDownloadResponse,pDownloadBody)=>{const tmpPageError=this._validateEntityPageResponse(pEntity,pMeadowFilterExpression,pDownloadError,pDownloadResponse,pDownloadBody,`[${pRecordStartCursor}/${pRecordCount}]`);if(tmpPageError){return fCallback(tmpPageError);}// Do not cache projected (Lite/partial) records in the entity cache — a
 // partial record would shadow the full record for other consumers
 // (row-click View, {~E:~}). Projected fetches are rendered straight from
 // the list state and never need to be in the entity cache.
@@ -7471,7 +7508,7 @@ if(!tmpProjection){this.cacheIndividualEntityRecords(pEntity,pDownloadBody,tmpSc
 	 * @param {(pError?: Error, pRecordCount?: number) => void} fCallback - The callback function to call when the operation is complete.
 	 * @param {string} [postfix] - Optional, adds a postfix string to the count url
 	 * @param {string} [pURLPrefix] - Optional per-request URL prefix; overrides the provider default.
-	 */getEntitySetRecordCount(pEntity,pMeadowFilterExpression,fCallback){let postfix=arguments.length>3&&arguments[3]!==undefined?arguments[3]:'';let pURLPrefix=arguments.length>4&&arguments[4]!==undefined?arguments[4]:'';this.resolveEntityQuerySupport(pEntity,pURLPrefix,(pSupportError,pSupportsQuery)=>{this._readEntityCount(pEntity,pMeadowFilterExpression,{SupportsQuery:pSupportsQuery,URLPrefix:pURLPrefix||'',Postfix:postfix||''},(pError,pResponse,pBody)=>{if(pResponse&&pResponse.statusCode&&pResponse.statusCode>=400){this.log.error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pResponse.statusCode} ${pResponse.statusMessage}`);return fCallback(new Error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pResponse.statusCode} ${JSON.stringify(pBody||{})}`));}if(pError){this.log.error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pError}`);return fCallback(pError);}let tmpRecordCount=0;if(pBody&&pBody.Count){tmpRecordCount=pBody.Count;}return fCallback(pError,tmpRecordCount);});});}/**
+	 */getEntitySetRecordCount(pEntity,pMeadowFilterExpression,fCallback){let postfix=arguments.length>3&&arguments[3]!==undefined?arguments[3]:'';let pURLPrefix=arguments.length>4&&arguments[4]!==undefined?arguments[4]:'';this.resolveEntityQuerySupport(pEntity,pURLPrefix,(pSupportError,pSupportsQuery)=>{this._readEntityCount(pEntity,pMeadowFilterExpression,{SupportsQuery:pSupportsQuery,SupportUnresolved:Boolean(pSupportError),URLPrefix:pURLPrefix||'',Postfix:postfix||''},(pError,pResponse,pBody)=>{if(pResponse&&pResponse.statusCode&&pResponse.statusCode>=400){this.log.error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pResponse.statusCode} ${pResponse.statusMessage}`);return fCallback(new Error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pResponse.statusCode} ${JSON.stringify(pBody||{})}`));}if(pError){this.log.error(`Error getting entity count of [${pEntity}] filtered to [${this._describeFilter(pMeadowFilterExpression)}]: ${pError}`);return fCallback(pError);}let tmpRecordCount=0;if(pBody&&pBody.Count){tmpRecordCount=pBody.Count;}return fCallback(pError,tmpRecordCount);});});}/**
 	 * @param {string} pEntity - The name of the entity to get.
 	 * @param {string} pMeadowFilterExpression - The meadow filter expression to filter the entity set by.
 	 * @param {(pError?: Error, pEntitySet?: Array<Record<string, any>>) => void} fCallback - The callback function to call when the operation is complete.
@@ -7491,7 +7528,7 @@ else if(tmpColumnName in this.entityColumnTranslations){tmpIDColumnsToCache.push
 // page share the same SupportsQuery flag). The legacy GET reads embed the
 // filter (and any large IN-list) in the URI, which is exactly the long-URI
 // failure POST /:Entity/Query avoids when the server supports it.
-this.resolveEntityQuerySupport(pEntity,tmpURLPrefix,(pSupportError,pSupportsQuery)=>{const tmpReadOptions={SupportsQuery:pSupportsQuery,URLPrefix:tmpURLPrefix,Postfix:postfix||'',Projection:tmpProjection};// Discard anything from the cache that has expired or is over size.
+this.resolveEntityQuerySupport(pEntity,tmpURLPrefix,(pSupportError,pSupportsQuery)=>{const tmpReadOptions={SupportsQuery:pSupportsQuery,SupportUnresolved:Boolean(pSupportError),URLPrefix:tmpURLPrefix,Postfix:postfix||'',Projection:tmpProjection};// Discard anything from the cache that has expired or is over size.
 this.recordSetCache[tmpCacheKey].prune(function(){let tmpPossibleRecords=this.recordSetCache[tmpCacheKey].read(pMeadowFilterExpression);if(tmpPossibleRecords){return fCallback(null,tmpPossibleRecords);}if(pOptions.NoCount){// Lazily load until we hit a not full page rather than using couns.
 // Does not respect parallelization.
 const pageSize=250;let page=0;let returnSet=[];const recursiveCallback=(pDownloadError,pDownloadResponse,pDownloadBody)=>{// A transport-level failure (e.g. connection reset, expired TLS

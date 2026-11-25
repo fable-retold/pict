@@ -34,6 +34,7 @@ declare class PictMeadowEntityProvider {
         Step: Record<string, any>;
     }>> | null;
     useQueryEndpoint: any;
+    unresolvedQueryURLLengthThreshold: any;
     readRetryConfiguration: any;
     /**
      * Optional outcome classifier passed through to the RestClient on every
@@ -76,24 +77,42 @@ declare class PictMeadowEntityProvider {
     /**
      * In-flight schema fetches, keyed identically to the cache, so concurrent
      * consumers collapse onto a single request.
-     * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null) => void>>}
+     * @type {Record<string, Array<(pError: Error|null, pSchema: Record<string, any>|null, pOutcome?: 'Schema'|'Absent'|'Failed') => void>>}
      */
-    entitySchemaInflight: Record<string, Array<(pError: Error | null, pSchema: Record<string, any> | null) => void>>;
+    entitySchemaInflight: Record<string, Array<(pError: Error | null, pSchema: Record<string, any> | null, pOutcome?: "Schema" | "Absent" | "Failed") => void>>;
     /**
      * Fetch (and cache) an entity's `<Entity>/Schema` body, shared across every
      * consumer. Concurrent callers for the same (urlPrefix, entity) collapse onto
      * one request; a successful fetch also primes the capability cache, so a
      * later `resolveEntityQuerySupport` resolves without a probe.
      *
-     * Failures are not cached — they resolve with the error for this call but
-     * leave the key re-fetchable, matching the capability probe's retry posture.
+     * Only a usable schema is cached. Any other response (an auth or server
+     * error status, or an error object in the body) is handed to this call's
+     * callers as-is and leaves the key re-fetchable; a missing Schema route
+     * additionally caches the entity as not supporting Query.
      *
      * @param {string} pEntity - The entity name.
      * @param {string} [pURLPrefix] - The URL prefix in play.
-     * @param {(pError: Error|null, pSchema: Record<string, any>|null) => void} fCallback - Completion callback.
+     * @param {(pError: Error|null, pSchema: Record<string, any>|null, pOutcome?: 'Schema'|'Absent'|'Failed') => void} fCallback - Completion callback; pOutcome is the `_classifySchemaResponse` verdict.
      * @return {void}
      */
-    getEntitySchema(pEntity: string, pURLPrefix?: string, fCallback: (pError: Error | null, pSchema: Record<string, any> | null) => void): void;
+    getEntitySchema(pEntity: string, pURLPrefix?: string, fCallback: (pError: Error | null, pSchema: Record<string, any> | null, pOutcome?: "Schema" | "Absent" | "Failed") => void): void;
+    /**
+     * Classify a `<Entity>/Schema` response.
+     *
+     * - `Schema`: a usable schema body.
+     * - `Absent`: the route does not exist (404/405/501) -- the server is too old
+     *   to serve a schema, which is a stable fact about it.
+     * - `Failed`: anything else (transport error, auth/gateway/server error, or
+     *   an error object delivered with a success status). Says nothing about the
+     *   server's capabilities and must not be cached.
+     *
+     * @param {Error|null} pError - Transport error, if any.
+     * @param {any} pResponse - The HTTP response.
+     * @param {any} pBody - The parsed response body.
+     * @return {'Schema'|'Absent'|'Failed'} The outcome.
+     */
+    _classifySchemaResponse(pError: Error | null, pResponse: any, pBody: any): "Schema" | "Absent" | "Failed";
     /**
      * Compute the capability cache key for an (entity, urlPrefix) pair.
      *
@@ -139,14 +158,15 @@ declare class PictMeadowEntityProvider {
      * Schema endpoint once and caching the result per (urlPrefix, entity).
      * Concurrent calls for the same key collapse onto a single probe.
      *
-     * Probe failures (network/parse) are NOT cached — they resolve to false (GET
-     * fallback) for this call but allow a later retry, so a transient blip does
-     * not permanently disable the faster transport for the session. A successful
-     * probe of an older server (no metadata) caches false and never re-probes.
+     * A probe that fails (transport error, auth/gateway/server error, error body)
+     * is NOT cached and calls back with that error and `false`: support is
+     * unresolved, the read decides per request (see `_shouldUseQueryTransport`),
+     * and the next read probes again. A server with no Schema route, or one whose
+     * schema advertises no metadata, caches false and is never re-probed.
      *
      * @param {string} pEntity - The entity name.
      * @param {string} pURLPrefix - The URL prefix in play.
-     * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback.
+     * @param {(pError: Error|null, pSupportsQuery: boolean) => void} fCallback - Completion callback; a non-null error means support is unresolved.
      * @return {void}
      */
     resolveEntityQuerySupport(pEntity: string, pURLPrefix: string, fCallback: (pError: Error | null, pSupportsQuery: boolean) => void): void;
@@ -259,6 +279,18 @@ declare class PictMeadowEntityProvider {
      */
     _buildQueryReadBody(pMeadowFilterExpression: string, pBegin?: number | null, pCap?: number | null, pProjection?: Record<string, any>): Record<string, any>;
     /**
+     * Decide whether a read goes out as POST /:Entity/Query. Known support wins.
+     * When the capability probe failed (support unresolved) the GET is kept unless
+     * its URL is over `unresolvedQueryURLLengthThreshold` -- a GET that long is
+     * refused by the gateway whatever the server supports, so the POST is the
+     * only request with a chance of succeeding.
+     *
+     * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved }.
+     * @param {string} pGetURL - The URL the GET read would use.
+     * @return {boolean} True to send the read as POST /:Entity/Query.
+     */
+    _shouldUseQueryTransport(pReadOptions: Record<string, any>, pGetURL: string): boolean;
+    /**
      * Read a page of an entity set, using POST /:Entity/Query when supported and
      * falling back to the legacy GET read otherwise. The callback mirrors
      * restClient.getJSON exactly: (pError, pResponse, pBody).
@@ -267,7 +299,7 @@ declare class PictMeadowEntityProvider {
      * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
      * @param {number|null} pBegin - Pagination start cursor (null for unpaged).
      * @param {number|null} pCap - Pagination page size (null for unpaged).
-     * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix, Projection }.
+     * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved, URLPrefix, Postfix, Projection }.
      * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
      * @return {void}
      */
@@ -279,7 +311,7 @@ declare class PictMeadowEntityProvider {
      *
      * @param {string} pEntity - The entity name.
      * @param {string} pMeadowFilterExpression - The meadow filter string (may be empty).
-     * @param {Record<string, any>} pReadOptions - { SupportsQuery, URLPrefix, Postfix }.
+     * @param {Record<string, any>} pReadOptions - { SupportsQuery, SupportUnresolved, URLPrefix, Postfix }.
      * @param {(pError: Error|null, pResponse: any, pBody: any) => void} fCallback - Completion callback.
      * @return {void}
      */
